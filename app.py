@@ -159,12 +159,7 @@ def build_orientations(slope_dd, slope_dip, sets):
 
 def planar_result(item, slope_dd, slope_dip, friction, lateral):
     align = angle_diff(item["dip_direction"], slope_dd)
-    result = {
-        "alignment": align,
-        "daylights": plane_daylights(item["dip_direction"], item["dip"], slope_dd, slope_dip),
-        "exceeds_friction": item["dip"] > friction,
-        "aligned": align <= lateral,
-    }
+    result = {"alignment": align, "daylights": plane_daylights(item["dip_direction"], item["dip"], slope_dd, slope_dip), "exceeds_friction": item["dip"] > friction, "aligned": align <= lateral}
     result["susceptible"] = result["aligned"] and result["exceeds_friction"] and result["daylights"]
     return result
 
@@ -307,8 +302,8 @@ def plot_stereonet(orientations, wedge_results, show_planar, show_wedge, show_to
 
 
 def main():
-    st.set_page_config(page_title="Geotechnical Stereonet", layout="wide")
-    st.title("Geotechnical Stereonet")
+    st.set_page_config(page_title="Stereonet and Kinematic Analysis", layout="wide")
+    st.title("Stereonet and Kinematic Analysis")
     defaults = load_defaults()
 
     with st.sidebar:
