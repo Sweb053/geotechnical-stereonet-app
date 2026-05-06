@@ -1,49 +1,24 @@
 {
   "slope_dip_direction": 180.0,
-  "slope_dip": 52.0,
+  "slope_dip": 53.0,
   "friction_angle": 37.0,
   "lateral_limit": 20.0,
   "sets": [
     {
       "Plot": true,
-      "Type": "Foliation",
-      "Name": "F1",
-      "Dip direction": 120.0,
-      "Dip": 35.0
+      "Name": "S1",
+      "Dip direction": 0.0,
+      "Dip": 88.0
     },
     {
       "Plot": true,
-      "Type": "Joint",
-      "Name": "J1",
+      "Name": "S2",
       "Dip direction": 95.0,
       "Dip": 70.0
     },
     {
       "Plot": true,
-      "Type": "Joint",
-      "Name": "J2",
-      "Dip direction": 210.0,
-      "Dip": 55.0
-    }
-  ],
-  "foliation": [
-    {
-      "Plot": true,
-      "Name": "F1",
-      "Dip direction": 120.0,
-      "Dip": 35.0
-    }
-  ],
-  "joints": [
-    {
-      "Plot": true,
-      "Name": "J1",
-      "Dip direction": 95.0,
-      "Dip": 70.0
-    },
-    {
-      "Plot": true,
-      "Name": "J2",
+      "Name": "S3",
       "Dip direction": 210.0,
       "Dip": 55.0
     }
