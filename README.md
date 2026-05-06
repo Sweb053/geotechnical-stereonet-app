@@ -1,6 +1,6 @@
 # Geotechnical Stereonet
 
-A Streamlit app for plotting slope, foliation, and joint orientations on a lower-hemisphere stereonet, with screening-level planar sliding, wedge sliding, and toppling checks.
+A Streamlit app for plotting slope and discontinuity set orientations on a lower-hemisphere stereonet, with screening-level planar sliding, wedge sliding, and toppling checks.
 
 ## Run Locally
 
@@ -21,6 +21,7 @@ python -m streamlit run app.py
 
 - Dip direction is azimuth clockwise from north.
 - Dip is in degrees from horizontal and must be between 0 and 90.
+- Enter all discontinuities in one `Discontinuity Sets` table.
 - The app uses lower-hemisphere stereographic projection.
 
 ## Kinematic Analysis
