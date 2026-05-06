@@ -192,7 +192,7 @@ def add_grid(ax):
     for radius in np.tan(np.deg2rad((90.0 - np.arange(10, 90, 10)) / 2.0)):
         ax.plot(radius * np.sin(theta), radius * np.cos(theta), color="#d7dde2", linewidth=0.8, zorder=0)
     for text, x, y in [("N", 0, 1.08), ("E", 1.08, 0), ("S", 0, -1.08), ("W", -1.08, 0)]:
-        ax.text(x, y, text, ha="center", va="center", fontsize=9, weight="bold")
+        ax.text(x, y, text, ha="center", va="center", fontsize=11, weight="bold")
     ax.set_aspect("equal")
     ax.set_xlim(-1.13, 1.13)
     ax.set_ylim(-1.13, 1.13)
@@ -230,7 +230,7 @@ def draw_zones(ax, show_planar, show_wedge, show_toppling, slope_dd, slope_dip, 
 
 
 def plot_stereonet(orientations, wedge_results, show_planar, show_wedge, show_toppling, show_zones, slope_dd, slope_dip, friction, lateral):
-    fig, ax = plt.subplots(figsize=(4.0, 4.0), dpi=130)
+    fig, ax = plt.subplots(figsize=(7.5, 7.5), dpi=140)
     add_grid(ax)
     if show_zones and (show_planar or show_wedge or show_toppling):
         draw_zones(ax, show_planar, show_wedge, show_toppling, slope_dd, slope_dip, friction, lateral)
@@ -238,39 +238,39 @@ def plot_stereonet(orientations, wedge_results, show_planar, show_wedge, show_to
         theta = np.linspace(0, 2 * np.pi, 361)
         if show_planar or show_toppling:
             r = np.tan(np.deg2rad(friction / 2.0))
-            ax.plot(r * np.sin(theta), r * np.cos(theta), color="#9a3412", linewidth=1.1, linestyle=":")
+            ax.plot(r * np.sin(theta), r * np.cos(theta), color="#9a3412", linewidth=1.4, linestyle=":")
         if show_wedge:
             r = np.tan(np.deg2rad((90.0 - friction) / 2.0))
-            ax.plot(r * np.sin(theta), r * np.cos(theta), color=WEDGE, linewidth=1.1, linestyle=":")
+            ax.plot(r * np.sin(theta), r * np.cos(theta), color=WEDGE, linewidth=1.4, linestyle=":")
         for x, y in great_circle(slope_dd, slope_dip):
-            ax.plot(x, y, color="#57534e", linewidth=1.2, linestyle="-.")
+            ax.plot(x, y, color="#57534e", linewidth=1.5, linestyle="-.")
 
     for item in orientations:
         color = COLORS.get(item["type"], "#555")
         highlighted = bool(item.get("planar", {}).get("susceptible") or item.get("toppling", {}).get("susceptible"))
         for x, y in great_circle(item["dip_direction"], item["dip"]):
-            ax.plot(x, y, color=color, linewidth=2.1 if highlighted else 1.4, alpha=1.0 if highlighted else 0.88)
+            ax.plot(x, y, color=color, linewidth=3 if highlighted else 2, alpha=1.0 if highlighted else 0.88)
         ptrend, pplunge = pole_from_plane(item["dip_direction"], item["dip"])
         x, y = project(np.array([ptrend]), np.array([pplunge]))
-        ax.scatter([x[0]], [y[0]], s=48 if highlighted else 34, color=color, edgecolor="white", linewidth=0.8, zorder=5)
-        ax.annotate(item["label"], (x[0], y[0]), xytext=(4, 3), textcoords="offset points", fontsize=6.5, bbox={"boxstyle": "round,pad=0.12", "facecolor": "white", "edgecolor": color, "linewidth": 0.6})
+        ax.scatter([x[0]], [y[0]], s=86 if highlighted else 58, color=color, edgecolor="white", zorder=5)
+        ax.annotate(item["label"], (x[0], y[0]), xytext=(6, 5), textcoords="offset points", fontsize=8.5, bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": color, "linewidth": 0.8})
         item["pole"] = f"{ptrend:03.0f}/{pplunge:02.0f}"
 
     for i, result in enumerate(wedge_results, 1):
         x, y = project(np.array([result["trend"]]), np.array([result["plunge"]]))
-        ax.scatter([x[0]], [y[0]], marker="X", s=56 if result["susceptible"] else 34, color=WEDGE if result["susceptible"] else "#818cf8", edgecolor="white", linewidth=0.8, zorder=6)
-        ax.annotate(f"W{i}", (x[0], y[0]), xytext=(4, -7), textcoords="offset points", fontsize=6.5, bbox={"boxstyle": "round,pad=0.12", "facecolor": "white", "edgecolor": WEDGE, "linewidth": 0.6})
+        ax.scatter([x[0]], [y[0]], marker="X", s=100 if result["susceptible"] else 58, color=WEDGE if result["susceptible"] else "#818cf8", edgecolor="white", zorder=6)
+        ax.annotate(f"W{i}", (x[0], y[0]), xytext=(6, -10), textcoords="offset points", fontsize=8.5, bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": WEDGE, "linewidth": 0.8})
 
-    handles = [plt.Line2D([0], [0], color=c, marker="o", linewidth=1.5, label=k) for k, c in COLORS.items() if any(o["type"] == k for o in orientations)]
+    handles = [plt.Line2D([0], [0], color=c, marker="o", linewidth=2, label=k) for k, c in COLORS.items() if any(o["type"] == k for o in orientations)]
     if show_zones:
         if show_planar:
-            handles.append(plt.Line2D([0], [0], color=PLANAR, linewidth=5, alpha=0.35, label="Planar zone"))
+            handles.append(plt.Line2D([0], [0], color=PLANAR, linewidth=8, alpha=0.35, label="Planar zone"))
         if show_wedge:
-            handles.append(plt.Line2D([0], [0], color=WEDGE, linewidth=5, alpha=0.35, label="Wedge zone"))
+            handles.append(plt.Line2D([0], [0], color=WEDGE, linewidth=8, alpha=0.35, label="Wedge zone"))
         if show_toppling:
-            handles.append(plt.Line2D([0], [0], color=TOPPLE, linewidth=5, alpha=0.35, label="Toppling zone"))
-    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.03), ncol=2, frameon=False, fontsize=6.5)
-    fig.tight_layout(rect=(0, 0.14, 1, 1))
+            handles.append(plt.Line2D([0], [0], color=TOPPLE, linewidth=8, alpha=0.35, label="Toppling zone"))
+    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.03), ncol=3, frameon=False, fontsize=8.5)
+    fig.tight_layout(rect=(0, 0.13, 1, 1))
     return fig
 
 
