@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-COLORS = {"Slope": "#d1495b", "Foliation": "#00798c", "Joint": "#edae49"}
+COLORS = {"Slope": "#d1495b", "Discontinuity": "#00798c"}
 PLANAR = "#7c2d12"
 WEDGE = "#4f46e5"
 TOPPLE = "#9333ea"
@@ -23,26 +23,39 @@ def load_defaults() -> dict:
         "slope_dip": 45.0,
         "friction_angle": 30.0,
         "lateral_limit": 20.0,
-        "foliation": [{"Plot": True, "Name": "F1", "Dip direction": 120.0, "Dip": 35.0}],
-        "joints": [
-            {"Plot": True, "Name": "J1", "Dip direction": 95.0, "Dip": 70.0},
-            {"Plot": True, "Name": "J2", "Dip direction": 210.0, "Dip": 55.0},
+        "sets": [
+            {"Plot": True, "Name": "S1", "Dip direction": 120.0, "Dip": 35.0},
+            {"Plot": True, "Name": "S2", "Dip direction": 95.0, "Dip": 70.0},
+            {"Plot": True, "Name": "S3", "Dip direction": 210.0, "Dip": 55.0},
         ],
     }
     try:
-        return fallback | json.loads(DEFAULTS_PATH.read_text(encoding="utf-8"))
+        loaded = json.loads(DEFAULTS_PATH.read_text(encoding="utf-8"))
     except Exception:
         return fallback
+    defaults = fallback | loaded
+    if "sets" not in loaded:
+        defaults["sets"] = []
+        for row in loaded.get("foliation", []):
+            row = dict(row)
+            row.pop("Type", None)
+            defaults["sets"].append(row)
+        for row in loaded.get("joints", []):
+            row = dict(row)
+            row.pop("Type", None)
+            defaults["sets"].append(row)
+    else:
+        defaults["sets"] = [{k: v for k, v in row.items() if k != "Type"} for row in defaults["sets"]]
+    return defaults
 
 
-def save_defaults(slope_dd, slope_dip, friction, lateral, foliation, joints) -> None:
+def save_defaults(slope_dd, slope_dip, friction, lateral, sets) -> None:
     data = {
         "slope_dip_direction": float(slope_dd),
         "slope_dip": float(slope_dip),
         "friction_angle": float(friction),
         "lateral_limit": float(lateral),
-        "foliation": foliation.where(pd.notnull(foliation), None).to_dict(orient="records"),
-        "joints": joints.where(pd.notnull(joints), None).to_dict(orient="records"),
+        "sets": sets.where(pd.notnull(sets), None).to_dict(orient="records"),
     }
     DEFAULTS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -92,8 +105,8 @@ def trend_plunge_from_vectors(vectors):
 
 def project(trend, plunge):
     tr = np.deg2rad(trend)
-    r = np.tan(np.deg2rad((90.0 - plunge) / 2.0))
-    return r * np.sin(tr), r * np.cos(tr)
+    radius = np.tan(np.deg2rad((90.0 - plunge) / 2.0))
+    return radius * np.sin(tr), radius * np.cos(tr)
 
 
 def plane_normal(dip_direction, dip):
@@ -122,26 +135,25 @@ def great_circle(dip_direction, dip, samples=361):
     ref = np.array([0.0, 0.0, 1.0])
     if abs(float(np.dot(normal, ref))) > 0.95:
         ref = np.array([1.0, 0.0, 0.0])
-    a = np.cross(normal, ref)
-    a = a / np.linalg.norm(a)
-    b = np.cross(normal, a)
-    b = b / np.linalg.norm(b)
+    axis_a = np.cross(normal, ref)
+    axis_a = axis_a / np.linalg.norm(axis_a)
+    axis_b = np.cross(normal, axis_a)
+    axis_b = axis_b / np.linalg.norm(axis_b)
     angles = np.linspace(0, 2 * np.pi, samples)
-    vectors = np.cos(angles)[:, None] * a + np.sin(angles)[:, None] * b
+    vectors = np.cos(angles)[:, None] * axis_a + np.sin(angles)[:, None] * axis_b
     trend, plunge = trend_plunge_from_vectors(vectors)
     x, y = project(trend, plunge)
     breaks = np.where(np.hypot(np.diff(x), np.diff(y)) > 0.35)[0] + 1
     return [(xp, yp) for xp, yp in zip(np.split(x, breaks), np.split(y, breaks)) if len(xp) > 1]
 
 
-def build_orientations(slope_dd, slope_dip, foliation, joints):
+def build_orientations(slope_dd, slope_dip, sets):
     orientations = [{"type": "Slope", "label": "Slope", "dip_direction": clean(slope_dd, 360, "Slope dip direction") % 360, "dip": clean(slope_dip, 90, "Slope dip")}]
-    for kind, frame, prefix in [("Foliation", foliation, "F"), ("Joint", joints, "J")]:
-        for i, row in frame.iterrows():
-            if not bool(row.get("Plot", True)):
-                continue
-            label = str(row.get("Name") or f"{prefix}{i + 1}")
-            orientations.append({"type": kind, "label": label, "dip_direction": clean(row.get("Dip direction"), 360, f"{label} dip direction") % 360, "dip": clean(row.get("Dip"), 90, f"{label} dip")})
+    for index, row in sets.iterrows():
+        if not bool(row.get("Plot", True)):
+            continue
+        label = str(row.get("Name") or f"S{index + 1}")
+        orientations.append({"type": "Discontinuity", "label": label, "dip_direction": clean(row.get("Dip direction"), 360, f"{label} dip direction") % 360, "dip": clean(row.get("Dip"), 90, f"{label} dip")})
     return orientations
 
 
@@ -172,7 +184,7 @@ def analyse_planar(orientations, slope_dd, slope_dip, friction, lateral):
             continue
         result = planar_result(item, slope_dd, slope_dip, friction, lateral)
         item["planar"] = result
-        rows.append({"Type": item["type"], "Name": item["label"], "Dip direction": f"{item['dip_direction']:03.0f}", "Dip": f"{item['dip']:02.0f}", "Alignment": f"{result['alignment']:.1f}", "Daylights": "Yes" if result["daylights"] else "No", "Dip > friction": "Yes" if result["exceeds_friction"] else "No", "Planar sliding": "Potential" if result["susceptible"] else "No"})
+        rows.append({"Name": item["label"], "Dip direction": f"{item['dip_direction']:03.0f}", "Dip": f"{item['dip']:02.0f}", "Alignment": f"{result['alignment']:.1f}", "Daylights": "Yes" if result["daylights"] else "No", "Dip > friction": "Yes" if result["exceeds_friction"] else "No", "Planar sliding": "Potential" if result["susceptible"] else "No"})
     return pd.DataFrame(rows)
 
 
@@ -183,7 +195,7 @@ def analyse_toppling(orientations, slope_dd, slope_dip, friction, lateral):
             continue
         result = toppling_result(item, slope_dd, slope_dip, friction, lateral)
         item["toppling"] = result
-        rows.append({"Type": item["type"], "Name": item["label"], "Dip direction": f"{item['dip_direction']:03.0f}", "Dip": f"{item['dip']:02.0f}", "Into-slope alignment": f"{result['alignment']:.1f}", "Threshold dip": f"{result['threshold']:.1f}", "Dips into slope": "Yes" if result["into_slope"] else "No", "Toppling": "Potential" if result["susceptible"] else "No"})
+        rows.append({"Name": item["label"], "Dip direction": f"{item['dip_direction']:03.0f}", "Dip": f"{item['dip']:02.0f}", "Into-slope alignment": f"{result['alignment']:.1f}", "Threshold dip": f"{result['threshold']:.1f}", "Dips into slope": "Yes" if result["into_slope"] else "No", "Toppling": "Potential" if result["susceptible"] else "No"})
     return pd.DataFrame(rows)
 
 
@@ -312,17 +324,27 @@ def main():
         lateral = st.number_input("Lateral limit", 0.0, 90.0, float(defaults["lateral_limit"]), 1.0, key="lateral")
         show_summary = st.toggle("Show orientation summary", value=True)
 
-    st.subheader("Foliation")
-    foliation = st.data_editor(pd.DataFrame(defaults["foliation"]), key="foliation", num_rows="dynamic", use_container_width=True, hide_index=True)
-    st.subheader("Joints")
-    joints = st.data_editor(pd.DataFrame(defaults["joints"]), key="joints", num_rows="dynamic", use_container_width=True, hide_index=True)
+    st.subheader("Discontinuity Sets")
+    sets = st.data_editor(
+        pd.DataFrame(defaults["sets"]),
+        key="sets",
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Plot": st.column_config.CheckboxColumn(default=True, width="small"),
+            "Name": st.column_config.TextColumn(required=False, width="medium"),
+            "Dip direction": st.column_config.NumberColumn(min_value=0.0, max_value=360.0, step=1.0, width="medium"),
+            "Dip": st.column_config.NumberColumn(min_value=0.0, max_value=90.0, step=1.0, width="medium"),
+        },
+    )
 
     if st.button("Save current inputs as defaults"):
-        save_defaults(slope_dd, slope_dip, friction, lateral, foliation, joints)
+        save_defaults(slope_dd, slope_dip, friction, lateral, sets)
         st.success("Saved defaults for this deployment session.")
 
     try:
-        orientations = build_orientations(slope_dd, slope_dip, foliation, joints)
+        orientations = build_orientations(slope_dd, slope_dip, sets)
         planar_df = analyse_planar(orientations, slope_dd, slope_dip, friction, lateral) if enable_planar else pd.DataFrame()
         wedge_df, wedge_results = analyse_wedge(orientations, slope_dd, slope_dip, friction, lateral) if enable_wedge else (pd.DataFrame(), [])
         toppling_df = analyse_toppling(orientations, slope_dd, slope_dip, friction, lateral) if enable_toppling else pd.DataFrame()
