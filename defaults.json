@@ -1,0 +1,28 @@
+{
+  "slope_dip_direction": 135.0,
+  "slope_dip": 45.0,
+  "friction_angle": 30.0,
+  "lateral_limit": 20.0,
+  "foliation": [
+    {
+      "Plot": true,
+      "Name": "F1",
+      "Dip direction": 120.0,
+      "Dip": 35.0
+    }
+  ],
+  "joints": [
+    {
+      "Plot": true,
+      "Name": "J1",
+      "Dip direction": 95.0,
+      "Dip": 70.0
+    },
+    {
+      "Plot": true,
+      "Name": "J2",
+      "Dip direction": 210.0,
+      "Dip": 55.0
+    }
+  ]
+}
