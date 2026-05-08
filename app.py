@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 from io import BytesIO
 from itertools import combinations
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -15,22 +17,39 @@ PLANAR = "#7c2d12"
 WEDGE = "#4f46e5"
 TOPPLE = "#9333ea"
 DEFAULTS_PATH = Path(__file__).with_name("defaults.json")
+REPORTS_DIR = Path(__file__).with_name("reports")
 
 
 def load_defaults() -> dict:
-    fallback = {"slope_dip_direction": 135.0, "slope_dip": 45.0, "friction_angle": 30.0, "lateral_limit": 20.0, "sets": [{"Plot": True, "Name": "S1", "Dip direction": 120.0, "Dip": 35.0}, {"Plot": True, "Name": "S2", "Dip direction": 95.0, "Dip": 70.0}, {"Plot": True, "Name": "S3", "Dip direction": 210.0, "Dip": 55.0}]}
+    fallback = {
+        "slope_dip_direction": 135.0,
+        "slope_dip": 45.0,
+        "friction_angle": 30.0,
+        "lateral_limit": 20.0,
+        "sets": [
+            {"Plot": True, "Name": "S1", "Dip direction": 120.0, "Dip": 35.0},
+            {"Plot": True, "Name": "S2", "Dip direction": 95.0, "Dip": 70.0},
+            {"Plot": True, "Name": "S3", "Dip direction": 210.0, "Dip": 55.0},
+        ],
+    }
     try:
         loaded = json.loads(DEFAULTS_PATH.read_text(encoding="utf-8"))
     except Exception:
         return fallback
     defaults = fallback | loaded
-    defaults["sets"] = [{k: v for k, v in row.items() if k != "Type"} for row in defaults.get("sets", fallback["sets"])]
+    if "sets" not in loaded:
+        defaults["sets"] = []
+        for row in loaded.get("foliation", fallback["sets"][:1]):
+            row = dict(row)
+            row.pop("Type", None)
+            defaults["sets"].append(row)
+        for row in loaded.get("joints", fallback["sets"][1:]):
+            row = dict(row)
+            row.pop("Type", None)
+            defaults["sets"].append(row)
+    else:
+        defaults["sets"] = [{k: v for k, v in row.items() if k != "Type"} for row in defaults.get("sets", fallback["sets"])]
     return defaults
-
-
-def save_defaults(slope_dd, slope_dip, friction, lateral, sets) -> None:
-    data = {"slope_dip_direction": float(slope_dd), "slope_dip": float(slope_dip), "friction_angle": float(friction), "lateral_limit": float(lateral), "sets": sets.where(pd.notnull(sets), None).to_dict(orient="records")}
-    DEFAULTS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def clean(value, limit, name):
@@ -55,15 +74,23 @@ def pole_from_plane(dip_direction, dip):
 
 
 def vector_from_trend_plunge(trend, plunge):
-    tr = np.deg2rad(trend)
-    pl = np.deg2rad(plunge)
-    return np.array([np.sin(tr) * np.cos(pl), np.cos(tr) * np.cos(pl), -np.sin(pl)])
+    trend_rad = np.deg2rad(trend)
+    plunge_rad = np.deg2rad(plunge)
+    return np.array([
+        np.sin(trend_rad) * np.cos(plunge_rad),
+        np.cos(trend_rad) * np.cos(plunge_rad),
+        -np.sin(plunge_rad),
+    ])
 
 
 def vector_components(trend, plunge):
-    tr = np.deg2rad(trend)
-    pl = np.deg2rad(plunge)
-    return np.sin(tr) * np.cos(pl), np.cos(tr) * np.cos(pl), -np.sin(pl)
+    trend_rad = np.deg2rad(trend)
+    plunge_rad = np.deg2rad(plunge)
+    return (
+        np.sin(trend_rad) * np.cos(plunge_rad),
+        np.cos(trend_rad) * np.cos(plunge_rad),
+        -np.sin(plunge_rad),
+    )
 
 
 def trend_plunge_from_vectors(vectors):
@@ -77,9 +104,9 @@ def trend_plunge_from_vectors(vectors):
 
 
 def project(trend, plunge):
-    tr = np.deg2rad(trend)
+    trend_rad = np.deg2rad(trend)
     radius = np.tan(np.deg2rad((90.0 - plunge) / 2.0))
-    return radius * np.sin(tr), radius * np.cos(tr)
+    return radius * np.sin(trend_rad), radius * np.cos(trend_rad)
 
 
 def plane_normal(dip_direction, dip):
@@ -96,7 +123,10 @@ def line_daylights(trend, plunge, slope_dd, slope_dip):
 
 
 def intersection(first, second):
-    line = np.cross(plane_normal(first["dip_direction"], first["dip"]), plane_normal(second["dip_direction"], second["dip"]))
+    line = np.cross(
+        plane_normal(float(first["dip_direction"]), float(first["dip"])),
+        plane_normal(float(second["dip_direction"]), float(second["dip"])),
+    )
     if np.linalg.norm(line) < 1e-9:
         return None
     trend, plunge = trend_plunge_from_vectors(np.array([line]))
@@ -105,14 +135,14 @@ def intersection(first, second):
 
 def great_circle(dip_direction, dip, samples=361):
     normal = plane_normal(dip_direction, dip)
-    ref = np.array([0.0, 0.0, 1.0])
-    if abs(float(np.dot(normal, ref))) > 0.95:
-        ref = np.array([1.0, 0.0, 0.0])
-    axis_a = np.cross(normal, ref)
+    reference = np.array([0.0, 0.0, 1.0])
+    if abs(float(np.dot(normal, reference))) > 0.95:
+        reference = np.array([1.0, 0.0, 0.0])
+    axis_a = np.cross(normal, reference)
     axis_a = axis_a / np.linalg.norm(axis_a)
     axis_b = np.cross(normal, axis_a)
     axis_b = axis_b / np.linalg.norm(axis_b)
-    angles = np.linspace(0, 2 * np.pi, samples)
+    angles = np.linspace(0.0, 2.0 * np.pi, samples)
     vectors = np.cos(angles)[:, None] * axis_a + np.sin(angles)[:, None] * axis_b
     trend, plunge = trend_plunge_from_vectors(vectors)
     x, y = project(trend, plunge)
@@ -121,38 +151,86 @@ def great_circle(dip_direction, dip, samples=361):
 
 
 def build_orientations(slope_dd, slope_dip, sets):
-    orientations = [{"type": "Slope", "label": "Slope", "dip_direction": clean(slope_dd, 360, "Slope dip direction") % 360, "dip": clean(slope_dip, 90, "Slope dip")}]
+    orientations = [{
+        "type": "Slope",
+        "label": "Slope",
+        "dip_direction": clean(slope_dd, 360, "Slope dip direction") % 360,
+        "dip": clean(slope_dip, 90, "Slope dip"),
+    }]
     for index, row in sets.iterrows():
         if not bool(row.get("Plot", True)):
             continue
         label = str(row.get("Name") or f"S{index + 1}")
-        orientations.append({"type": "Discontinuity", "label": label, "dip_direction": clean(row.get("Dip direction"), 360, f"{label} dip direction") % 360, "dip": clean(row.get("Dip"), 90, f"{label} dip")})
+        orientations.append({
+            "type": "Discontinuity",
+            "label": label,
+            "dip_direction": clean(row.get("Dip direction"), 360, f"{label} dip direction") % 360,
+            "dip": clean(row.get("Dip"), 90, f"{label} dip"),
+        })
     return orientations
 
 
 def planar_result(item, slope_dd, slope_dip, friction, lateral):
-    align = angle_diff(item["dip_direction"], slope_dd)
-    result = {"alignment": align, "daylights": plane_daylights(item["dip_direction"], item["dip"], slope_dd, slope_dip), "exceeds_friction": item["dip"] > friction, "aligned": align <= lateral}
-    result["susceptible"] = result["aligned"] and result["exceeds_friction"] and result["daylights"]
-    return result
+    alignment = angle_diff(item["dip_direction"], slope_dd)
+    aligned = alignment <= lateral
+    exceeds_friction = item["dip"] > friction
+    daylights = plane_daylights(item["dip_direction"], item["dip"], slope_dd, slope_dip)
+    susceptible = aligned and exceeds_friction and daylights
+    reasons = []
+    if not aligned:
+        reasons.append("outside lateral limit")
+    if not exceeds_friction:
+        reasons.append("dip <= friction")
+    if not daylights:
+        reasons.append("does not daylight")
+    return {
+        "alignment": alignment,
+        "daylights": daylights,
+        "exceeds_friction": exceeds_friction,
+        "susceptible": susceptible,
+        "reason": "Meets planar sliding criteria" if susceptible else ", ".join(reasons),
+    }
 
 
 def toppling_result(item, slope_dd, slope_dip, friction, lateral):
     threshold = max(0.0, 90.0 - slope_dip + friction)
-    align = angle_diff(item["dip_direction"], (slope_dd + 180.0) % 360.0)
-    result = {"alignment": align, "threshold": threshold, "into_slope": align <= lateral, "steep": item["dip"] > threshold}
-    result["susceptible"] = result["into_slope"] and result["steep"]
-    return result
+    alignment = angle_diff(item["dip_direction"], (slope_dd + 180.0) % 360.0)
+    into_slope = alignment <= lateral
+    steep = item["dip"] > threshold
+    susceptible = into_slope and steep
+    reasons = []
+    if not into_slope:
+        reasons.append("not dipping into slope")
+    if not steep:
+        reasons.append("dip below toppling threshold")
+    return {
+        "alignment": alignment,
+        "threshold": threshold,
+        "into_slope": into_slope,
+        "steep": steep,
+        "susceptible": susceptible,
+        "reason": "Meets toppling criteria" if susceptible else ", ".join(reasons),
+    }
 
 
 def analyse_planar(orientations, slope_dd, slope_dip, friction, lateral):
     rows = []
     for item in orientations:
         if item["type"] == "Slope":
+            item["planar"] = None
             continue
         result = planar_result(item, slope_dd, slope_dip, friction, lateral)
         item["planar"] = result
-        rows.append({"Name": item["label"], "Dip direction": f"{item['dip_direction']:03.0f}", "Dip": f"{item['dip']:02.0f}", "Alignment": f"{result['alignment']:.1f}", "Daylights": "Yes" if result["daylights"] else "No", "Dip > friction": "Yes" if result["exceeds_friction"] else "No", "Planar sliding": "Potential" if result["susceptible"] else "No"})
+        rows.append({
+            "Name": item["label"],
+            "Dip direction": f"{item['dip_direction']:03.0f}",
+            "Dip": f"{item['dip']:02.0f}",
+            "Alignment": f"{result['alignment']:.1f}",
+            "Daylights": "Yes" if result["daylights"] else "No",
+            "Dip > friction": "Yes" if result["exceeds_friction"] else "No",
+            "Planar sliding": "Potential" if result["susceptible"] else "No",
+            "Reason": result["reason"],
+        })
     return pd.DataFrame(rows)
 
 
@@ -160,10 +238,20 @@ def analyse_toppling(orientations, slope_dd, slope_dip, friction, lateral):
     rows = []
     for item in orientations:
         if item["type"] == "Slope":
+            item["toppling"] = None
             continue
         result = toppling_result(item, slope_dd, slope_dip, friction, lateral)
         item["toppling"] = result
-        rows.append({"Name": item["label"], "Dip direction": f"{item['dip_direction']:03.0f}", "Dip": f"{item['dip']:02.0f}", "Into-slope alignment": f"{result['alignment']:.1f}", "Threshold dip": f"{result['threshold']:.1f}", "Dips into slope": "Yes" if result["into_slope"] else "No", "Toppling": "Potential" if result["susceptible"] else "No"})
+        rows.append({
+            "Name": item["label"],
+            "Dip direction": f"{item['dip_direction']:03.0f}",
+            "Dip": f"{item['dip']:02.0f}",
+            "Into-slope alignment": f"{result['alignment']:.1f}",
+            "Threshold dip": f"{result['threshold']:.1f}",
+            "Dips into slope": "Yes" if result["into_slope"] else "No",
+            "Toppling": "Potential" if result["susceptible"] else "No",
+            "Reason": result["reason"],
+        })
     return pd.DataFrame(rows)
 
 
@@ -175,11 +263,40 @@ def analyse_wedge(orientations, slope_dd, slope_dip, friction, lateral):
         if line is None:
             continue
         trend, plunge = line
-        align = angle_diff(trend, slope_dd)
-        result = {"first": first["label"], "second": second["label"], "trend": trend, "plunge": plunge, "alignment": align, "daylights": line_daylights(trend, plunge, slope_dd, slope_dip), "exceeds_friction": plunge > friction, "aligned": align <= lateral}
-        result["susceptible"] = result["aligned"] and result["exceeds_friction"] and result["daylights"]
+        alignment = angle_diff(trend, slope_dd)
+        aligned = alignment <= lateral
+        exceeds_friction = plunge > friction
+        daylights = line_daylights(trend, plunge, slope_dd, slope_dip)
+        susceptible = aligned and exceeds_friction and daylights
+        reasons = []
+        if not aligned:
+            reasons.append("outside lateral limit")
+        if not exceeds_friction:
+            reasons.append("plunge <= friction")
+        if not daylights:
+            reasons.append("does not daylight")
+        result = {
+            "first": first["label"],
+            "second": second["label"],
+            "trend": trend,
+            "plunge": plunge,
+            "alignment": alignment,
+            "daylights": daylights,
+            "exceeds_friction": exceeds_friction,
+            "susceptible": susceptible,
+            "reason": "Meets wedge sliding criteria" if susceptible else ", ".join(reasons),
+        }
         results.append(result)
-        rows.append({"Planes": f"{first['label']} + {second['label']}", "Trend": f"{trend:03.0f}", "Plunge": f"{plunge:02.0f}", "Alignment": f"{align:.1f}", "Daylights": "Yes" if result["daylights"] else "No", "Plunge > friction": "Yes" if result["exceeds_friction"] else "No", "Wedge sliding": "Potential" if result["susceptible"] else "No"})
+        rows.append({
+            "Planes": f"{first['label']} + {second['label']}",
+            "Trend": f"{trend:03.0f}",
+            "Plunge": f"{plunge:02.0f}",
+            "Alignment": f"{alignment:.1f}",
+            "Daylights": "Yes" if daylights else "No",
+            "Plunge > friction": "Yes" if exceeds_friction else "No",
+            "Wedge sliding": "Potential" if susceptible else "No",
+            "Reason": result["reason"],
+        })
     return pd.DataFrame(rows), results
 
 
@@ -188,11 +305,22 @@ def add_grid(ax):
     theta = np.linspace(0, 2 * np.pi, 361)
     for angle in range(0, 360, 10):
         rad = np.deg2rad(angle)
-        ax.plot([0, np.sin(rad)], [0, np.cos(rad)], color="#b7c0c9" if angle % 30 == 0 else "#d7dde2", linewidth=1.1 if angle % 30 == 0 else 0.8, zorder=0)
+        ax.plot(
+            [0, np.sin(rad)],
+            [0, np.cos(rad)],
+            color="#b7c0c9" if angle % 30 == 0 else "#d7dde2",
+            linewidth=1.1 if angle % 30 == 0 else 0.8,
+            zorder=0,
+        )
     for radius in np.tan(np.deg2rad((90.0 - np.arange(10, 90, 10)) / 2.0)):
         ax.plot(radius * np.sin(theta), radius * np.cos(theta), color="#d7dde2", linewidth=0.8, zorder=0)
-    for text, x, y in [("N", 0, 1.08), ("E", 1.08, 0), ("S", 0, -1.08), ("W", -1.08, 0)]:
-        ax.text(x, y, text, ha="center", va="center", fontsize=11, weight="bold")
+    for text, x, y, ha, va in [
+        ("N", 0, 1.08, "center", "bottom"),
+        ("E", 1.08, 0, "left", "center"),
+        ("S", 0, -1.08, "center", "top"),
+        ("W", -1.08, 0, "right", "center"),
+    ]:
+        ax.text(x, y, text, ha=ha, va=va, fontsize=11, weight="bold")
     ax.set_aspect("equal")
     ax.set_xlim(-1.13, 1.13)
     ax.set_ylim(-1.13, 1.13)
@@ -210,7 +338,8 @@ def draw_zones(ax, show_planar, show_wedge, show_toppling, slope_dd, slope_dip, 
 
     def fill(mask, color):
         if np.any(mask):
-            ax.contourf(xx, yy, np.ma.masked_where(~mask, mask.astype(float)), levels=[0.5, 1.5], colors=[color], alpha=0.18, zorder=0.45)
+            values = np.ma.masked_where(~mask, mask.astype(float))
+            ax.contourf(xx, yy, values, levels=[0.5, 1.5], colors=[color], alpha=0.18, zorder=0.45)
 
     if show_planar:
         dd = (trend + 180.0) % 360.0
@@ -229,55 +358,171 @@ def draw_zones(ax, show_planar, show_wedge, show_toppling, slope_dd, slope_dip, 
         fill(inside & (angle_diff_array(dd, (slope_dd + 180.0) % 360.0) <= lateral) & (dip > threshold), TOPPLE)
 
 
+def add_guides(ax, show_planar, show_wedge, show_toppling, slope_dd, slope_dip, friction, lateral):
+    for center in [slope_dd, (slope_dd + 180.0) % 360.0]:
+        for bearing in [(center - lateral) % 360.0, (center + lateral) % 360.0]:
+            rad = np.deg2rad(bearing)
+            ax.plot([0, np.sin(rad)], [0, np.cos(rad)], color=PLANAR, linewidth=1.2, linestyle="--", alpha=0.55, zorder=1)
+    theta = np.linspace(0, 2 * np.pi, 361)
+    if show_planar or show_toppling:
+        radius = np.tan(np.deg2rad(friction / 2.0))
+        ax.plot(radius * np.sin(theta), radius * np.cos(theta), color="#9a3412", linewidth=1.4, linestyle=":")
+    if show_wedge:
+        radius = np.tan(np.deg2rad((90.0 - friction) / 2.0))
+        ax.plot(radius * np.sin(theta), radius * np.cos(theta), color=WEDGE, linewidth=1.4, linestyle=":")
+    for x, y in great_circle(slope_dd, slope_dip):
+        ax.plot(x, y, color="#57534e", linewidth=1.5, linestyle="-.")
+
+
 def plot_stereonet(orientations, wedge_results, show_planar, show_wedge, show_toppling, show_zones, slope_dd, slope_dip, friction, lateral):
     fig, ax = plt.subplots(figsize=(7.5, 7.5), dpi=140)
     add_grid(ax)
-    if show_zones and (show_planar or show_wedge or show_toppling):
+    show_any = show_planar or show_wedge or show_toppling
+    if show_zones and show_any:
         draw_zones(ax, show_planar, show_wedge, show_toppling, slope_dd, slope_dip, friction, lateral)
-    if show_planar or show_wedge or show_toppling:
-        theta = np.linspace(0, 2 * np.pi, 361)
-        if show_planar or show_toppling:
-            r = np.tan(np.deg2rad(friction / 2.0))
-            ax.plot(r * np.sin(theta), r * np.cos(theta), color="#9a3412", linewidth=1.4, linestyle=":")
-        if show_wedge:
-            r = np.tan(np.deg2rad((90.0 - friction) / 2.0))
-            ax.plot(r * np.sin(theta), r * np.cos(theta), color=WEDGE, linewidth=1.4, linestyle=":")
-        for x, y in great_circle(slope_dd, slope_dip):
-            ax.plot(x, y, color="#57534e", linewidth=1.5, linestyle="-.")
+    if show_any:
+        add_guides(ax, show_planar, show_wedge, show_toppling, slope_dd, slope_dip, friction, lateral)
 
     for item in orientations:
-        color = COLORS.get(item["type"], "#555")
-        highlighted = bool(item.get("planar", {}).get("susceptible") or item.get("toppling", {}).get("susceptible"))
+        color = COLORS.get(item["type"], "#555555")
+        planar_susceptible = bool(item.get("planar") and item["planar"].get("susceptible"))
+        toppling_susceptible = bool(item.get("toppling") and item["toppling"].get("susceptible"))
+        highlighted = planar_susceptible or toppling_susceptible
         for x, y in great_circle(item["dip_direction"], item["dip"]):
             ax.plot(x, y, color=color, linewidth=3 if highlighted else 2, alpha=1.0 if highlighted else 0.88)
-        ptrend, pplunge = pole_from_plane(item["dip_direction"], item["dip"])
-        x, y = project(np.array([ptrend]), np.array([pplunge]))
-        ax.scatter([x[0]], [y[0]], s=86 if highlighted else 58, color=color, edgecolor="white", zorder=5)
-        ax.annotate(item["label"], (x[0], y[0]), xytext=(6, 5), textcoords="offset points", fontsize=8.5, bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": color, "linewidth": 0.8})
-        item["pole"] = f"{ptrend:03.0f}/{pplunge:02.0f}"
+        pole_trend, pole_plunge = pole_from_plane(item["dip_direction"], item["dip"])
+        x, y = project(np.array([pole_trend]), np.array([pole_plunge]))
+        marker = "D" if planar_susceptible else "s" if toppling_susceptible else "o"
+        ax.scatter([x[0]], [y[0]], marker=marker, s=96 if highlighted else 62, color=color, edgecolor="white", linewidth=1.2, zorder=5)
+        ax.annotate(
+            item["label"],
+            (x[0], y[0]),
+            xytext=(6, 5),
+            textcoords="offset points",
+            fontsize=8.5,
+            bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": color, "linewidth": 0.8},
+        )
+        item["pole"] = f"{pole_trend:03.0f}/{pole_plunge:02.0f}"
 
-    for i, result in enumerate(wedge_results, 1):
+    for index, result in enumerate(wedge_results, 1):
         x, y = project(np.array([result["trend"]]), np.array([result["plunge"]]))
-        ax.scatter([x[0]], [y[0]], marker="X", s=100 if result["susceptible"] else 58, color=WEDGE if result["susceptible"] else "#818cf8", edgecolor="white", zorder=6)
-        ax.annotate(f"W{i}", (x[0], y[0]), xytext=(6, -10), textcoords="offset points", fontsize=8.5, bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": WEDGE, "linewidth": 0.8})
+        susceptible = bool(result["susceptible"])
+        ax.scatter([x[0]], [y[0]], marker="X", s=100 if susceptible else 58, color=WEDGE if susceptible else "#818cf8", edgecolor="white", zorder=6)
+        ax.annotate(f"W{index}", (x[0], y[0]), xytext=(6, -10), textcoords="offset points", fontsize=8.5, bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": WEDGE, "linewidth": 0.8})
 
-    handles = [plt.Line2D([0], [0], color=c, marker="o", linewidth=2, label=k) for k, c in COLORS.items() if any(o["type"] == k for o in orientations)]
-    if show_zones:
+    handles = [plt.Line2D([0], [0], color=color, marker="o", markersize=6, linewidth=2, label=kind) for kind, color in COLORS.items() if any(item["type"] == kind for item in orientations)]
+    if show_zones and show_any:
         if show_planar:
             handles.append(plt.Line2D([0], [0], color=PLANAR, linewidth=8, alpha=0.35, label="Planar zone"))
         if show_wedge:
             handles.append(plt.Line2D([0], [0], color=WEDGE, linewidth=8, alpha=0.35, label="Wedge zone"))
         if show_toppling:
             handles.append(plt.Line2D([0], [0], color=TOPPLE, linewidth=8, alpha=0.35, label="Toppling zone"))
-    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.03), ncol=3, frameon=False, fontsize=8.5)
+    if handles:
+        ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.03), ncol=3, frameon=False, fontsize=8.5)
     fig.tight_layout(rect=(0, 0.13, 1, 1))
     return fig
+
+
+def clean_report_table(dataframe):
+    table = dataframe.copy()
+    table = table.where(pd.notnull(table), "")
+    for column in table.columns:
+        table[column] = table[column].map(lambda value: str(value))
+    return table
+
+
+def add_report_header_page(pdf, location_id, slope_dd, slope_dip, friction, lateral):
+    fig, ax = plt.subplots(figsize=(8.27, 11.69))
+    ax.axis("off")
+    fig.patch.set_facecolor("white")
+    ax.text(0.08, 0.93, "Stereonet and Kinematic Analysis", fontsize=22, fontweight="bold", color="#202124")
+    ax.text(0.08, 0.87, f"Location ID: {location_id or '-'}", fontsize=14, color="#202124")
+    ax.text(0.08, 0.78, "Analysis inputs", fontsize=13, fontweight="bold", color="#202124")
+    rows = [
+        ("Slope dip direction", f"{slope_dd:.0f} deg"),
+        ("Slope dip", f"{slope_dip:.0f} deg"),
+        ("Friction angle", f"{friction:.0f} deg"),
+        ("Lateral limit", f"{lateral:.0f} deg"),
+    ]
+    y = 0.73
+    for label, value in rows:
+        ax.text(0.10, y, label, fontsize=11, color="#44403c")
+        ax.text(0.45, y, value, fontsize=11, color="#202124")
+        y -= 0.04
+    ax.text(0.08, 0.12, "This report reflects the current inputs and analysis results shown in the Streamlit app.", fontsize=9, color="#57534e")
+    pdf.savefig(fig, bbox_inches="tight")
+    plt.close(fig)
+
+
+def add_report_plot_page(pdf, stereonet_fig):
+    image_buffer = BytesIO()
+    stereonet_fig.savefig(image_buffer, format="png", dpi=220, bbox_inches="tight")
+    image_buffer.seek(0)
+    image = plt.imread(image_buffer)
+    fig, ax = plt.subplots(figsize=(8.27, 11.69))
+    ax.axis("off")
+    fig.patch.set_facecolor("white")
+    ax.text(0.08, 0.95, "Stereonet", fontsize=16, fontweight="bold", transform=ax.transAxes, color="#202124")
+    ax.imshow(image)
+    ax.set_position([0.08, 0.08, 0.84, 0.82])
+    pdf.savefig(fig, bbox_inches="tight")
+    plt.close(fig)
+
+
+def add_report_table_pages(pdf, title, dataframe, rows_per_page=24):
+    table = clean_report_table(dataframe)
+    if table.empty:
+        table = pd.DataFrame({"Result": ["No records to report."]})
+    for start in range(0, len(table), rows_per_page):
+        chunk = table.iloc[start : start + rows_per_page]
+        fig, ax = plt.subplots(figsize=(11.69, 8.27))
+        ax.axis("off")
+        fig.patch.set_facecolor("white")
+        suffix = "" if len(table) <= rows_per_page else f" ({start // rows_per_page + 1})"
+        ax.text(0.04, 0.94, f"{title}{suffix}", fontsize=15, fontweight="bold", transform=ax.transAxes, color="#202124")
+        rendered = ax.table(cellText=chunk.values, colLabels=chunk.columns, loc="center", cellLoc="left", colLoc="left", bbox=[0.04, 0.06, 0.92, 0.82])
+        rendered.auto_set_font_size(False)
+        rendered.set_fontsize(7.5)
+        rendered.scale(1, 1.25)
+        for (row, _column), cell in rendered.get_celld().items():
+            cell.set_edgecolor("#d6d3d1")
+            if row == 0:
+                cell.set_facecolor("#e7e5e4")
+                cell.set_text_props(weight="bold", color="#202124")
+            else:
+                cell.set_facecolor("#ffffff")
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+
+def build_pdf_report(location_id, slope_dd, slope_dip, friction, lateral, sets, stereonet_fig, summary, planar, wedge, toppling, include_planar, include_wedge, include_toppling):
+    report_buffer = BytesIO()
+    with PdfPages(report_buffer) as pdf:
+        add_report_header_page(pdf, location_id, slope_dd, slope_dip, friction, lateral)
+        add_report_table_pages(pdf, "Discontinuity sets", sets)
+        add_report_plot_page(pdf, stereonet_fig)
+        add_report_table_pages(pdf, "Orientation summary", summary)
+        if include_planar:
+            add_report_table_pages(pdf, "Planar sliding analysis", planar)
+        if include_wedge:
+            add_report_table_pages(pdf, "Wedge sliding analysis", wedge)
+        if include_toppling:
+            add_report_table_pages(pdf, "Toppling analysis", toppling)
+    return report_buffer.getvalue()
+
+
+def report_file_name(location_id):
+    clean_location = re.sub(r"[^A-Za-z0-9._-]+", "_", location_id.strip()).strip("_")
+    suffix = f"_{clean_location}" if clean_location else ""
+    return f"stereonet_kinematic_analysis_report{suffix}.pdf"
 
 
 def main():
     st.set_page_config(page_title="Stereonet and Kinematic Analysis", layout="wide")
     st.title("Stereonet and Kinematic Analysis")
     defaults = load_defaults()
+    location_id = st.text_input("Location ID:", value=str(defaults.get("location_id", "")), placeholder="Enter location ID")
 
     with st.sidebar:
         st.header("Slope")
@@ -293,11 +538,19 @@ def main():
         show_summary = st.toggle("Show orientation summary", value=True)
 
     st.subheader("Discontinuity Sets")
-    sets = st.data_editor(pd.DataFrame(defaults["sets"]), key="sets", num_rows="dynamic", use_container_width=True, hide_index=True, column_config={"Plot": st.column_config.CheckboxColumn(default=True, width="small"), "Name": st.column_config.TextColumn(required=False, width="medium"), "Dip direction": st.column_config.NumberColumn(min_value=0.0, max_value=360.0, step=1.0, width="medium"), "Dip": st.column_config.NumberColumn(min_value=0.0, max_value=90.0, step=1.0, width="medium")})
-
-    if st.button("Save current inputs as defaults"):
-        save_defaults(slope_dd, slope_dip, friction, lateral, sets)
-        st.success("Saved defaults for this deployment session.")
+    sets = st.data_editor(
+        pd.DataFrame(defaults["sets"]),
+        key="sets",
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Plot": st.column_config.CheckboxColumn(default=True, width="small"),
+            "Name": st.column_config.TextColumn(required=False, width="medium"),
+            "Dip direction": st.column_config.NumberColumn(min_value=0.0, max_value=360.0, step=1.0, width="medium"),
+            "Dip": st.column_config.NumberColumn(min_value=0.0, max_value=90.0, step=1.0, width="medium"),
+        },
+    )
 
     try:
         orientations = build_orientations(slope_dd, slope_dip, sets)
@@ -310,27 +563,55 @@ def main():
         fig.savefig(buffer, format="png", dpi=220, bbox_inches="tight")
         st.download_button("Download PNG", buffer.getvalue(), "geotechnical_stereonet.png", "image/png")
 
+        summary = pd.DataFrame([
+            {
+                "Type": item["type"],
+                "Name": item["label"],
+                "Dip direction": f"{item['dip_direction']:03.0f}",
+                "Dip": f"{item['dip']:02.0f}",
+                "Pole trend/plunge": item["pole"],
+            }
+            for item in orientations
+        ])
+
         if show_summary:
             st.subheader("Orientation summary")
-            st.dataframe(pd.DataFrame([{"Type": o["type"], "Name": o["label"], "Dip direction": f"{o['dip_direction']:03.0f}", "Dip": f"{o['dip']:02.0f}", "Pole trend/plunge": o["pole"]} for o in orientations]), hide_index=True, use_container_width=True)
+            st.dataframe(summary, hide_index=True, use_container_width=True)
         if enable_planar:
             st.subheader("Planar sliding analysis")
-            st.metric("Potential planar sliding planes", int((planar_df.get("Planar sliding", pd.Series(dtype=str)) == "Potential").sum()))
-            st.dataframe(planar_df, hide_index=True, use_container_width=True)
+            if planar_df.empty:
+                st.info("Add discontinuity sets to analyse planar sliding.")
+            else:
+                st.metric("Potential planar sliding planes", int((planar_df["Planar sliding"] == "Potential").sum()))
+                st.dataframe(planar_df, hide_index=True, use_container_width=True)
         if enable_wedge:
             st.subheader("Wedge sliding analysis")
-            st.metric("Potential wedge intersections", int((wedge_df.get("Wedge sliding", pd.Series(dtype=str)) == "Potential").sum()))
-            st.dataframe(wedge_df, hide_index=True, use_container_width=True)
+            if wedge_df.empty:
+                st.info("Add at least two discontinuity sets to analyse wedge sliding.")
+            else:
+                st.metric("Potential wedge intersections", int((wedge_df["Wedge sliding"] == "Potential").sum()))
+                st.dataframe(wedge_df, hide_index=True, use_container_width=True)
         if enable_toppling:
             st.subheader("Toppling analysis")
-            st.metric("Potential toppling planes", int((toppling_df.get("Toppling", pd.Series(dtype=str)) == "Potential").sum()))
-            st.dataframe(toppling_df, hide_index=True, use_container_width=True)
-        with st.expander("Analysis theory and sources"):
-            st.markdown("""
-This is a screening-level kinematic analysis. It checks orientation feasibility on a stereonet; it does not calculate factor of safety, block size, persistence, groundwater pressure, cohesion, seismic loading, or release-plane geometry.
+            if toppling_df.empty:
+                st.info("Add discontinuity sets to analyse toppling.")
+            else:
+                st.metric("Potential toppling planes", int((toppling_df["Toppling"] == "Potential").sum()))
+                st.dataframe(toppling_df, hide_index=True, use_container_width=True)
 
-Sources: Rocscience Dips kinematic analysis documentation, Markland (1972), and Wyllie & Mah, Rock Slope Engineering.
-""")
+        st.subheader("Export report")
+        if st.button("Generate PDF report", type="primary"):
+            pdf_bytes = build_pdf_report(location_id, slope_dd, slope_dip, friction, lateral, sets, fig, summary, planar_df, wedge_df, toppling_df, enable_planar, enable_wedge, enable_toppling)
+            file_name = report_file_name(location_id)
+            REPORTS_DIR.mkdir(exist_ok=True)
+            report_path = REPORTS_DIR / file_name
+            report_path.write_bytes(pdf_bytes)
+            st.session_state["report_pdf_bytes"] = pdf_bytes
+            st.session_state["report_pdf_name"] = file_name
+            st.session_state["report_pdf_path"] = str(report_path)
+        if "report_pdf_bytes" in st.session_state:
+            st.success(f"PDF report generated: {st.session_state['report_pdf_path']}")
+            st.download_button("Download PDF report", data=st.session_state["report_pdf_bytes"], file_name=st.session_state["report_pdf_name"], mime="application/pdf")
     except ValueError as exc:
         st.error(str(exc))
 
