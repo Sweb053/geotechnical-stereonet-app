@@ -115,11 +115,15 @@ def plane_normal(dip_direction, dip):
 
 
 def plane_daylights(dip_direction, dip, slope_dd, slope_dip):
-    return float(np.dot(plane_normal(slope_dd, slope_dip), vector_from_trend_plunge(dip_direction, dip))) < -1e-10
+    slope_normal = plane_normal(slope_dd, slope_dip)
+    dip_vector = vector_from_trend_plunge(dip_direction, dip)
+    return float(np.dot(slope_normal, dip_vector)) < -1e-10
 
 
 def line_daylights(trend, plunge, slope_dd, slope_dip):
-    return float(np.dot(plane_normal(slope_dd, slope_dip), vector_from_trend_plunge(trend, plunge))) < -1e-10
+    slope_normal = plane_normal(slope_dd, slope_dip)
+    line_vector = vector_from_trend_plunge(trend, plunge)
+    return float(np.dot(slope_normal, line_vector)) < -1e-10
 
 
 def intersection(first, second):
@@ -222,6 +226,7 @@ def analyse_planar(orientations, slope_dd, slope_dip, friction, lateral):
         result = planar_result(item, slope_dd, slope_dip, friction, lateral)
         item["planar"] = result
         rows.append({
+            "Type": item["type"],
             "Name": item["label"],
             "Dip direction": f"{item['dip_direction']:03.0f}",
             "Dip": f"{item['dip']:02.0f}",
@@ -243,6 +248,7 @@ def analyse_toppling(orientations, slope_dd, slope_dip, friction, lateral):
         result = toppling_result(item, slope_dd, slope_dip, friction, lateral)
         item["toppling"] = result
         rows.append({
+            "Type": item["type"],
             "Name": item["label"],
             "Dip direction": f"{item['dip_direction']:03.0f}",
             "Dip": f"{item['dip']:02.0f}",
@@ -394,14 +400,7 @@ def plot_stereonet(orientations, wedge_results, show_planar, show_wedge, show_to
         x, y = project(np.array([pole_trend]), np.array([pole_plunge]))
         marker = "D" if planar_susceptible else "s" if toppling_susceptible else "o"
         ax.scatter([x[0]], [y[0]], marker=marker, s=96 if highlighted else 62, color=color, edgecolor="white", linewidth=1.2, zorder=5)
-        ax.annotate(
-            item["label"],
-            (x[0], y[0]),
-            xytext=(6, 5),
-            textcoords="offset points",
-            fontsize=8.5,
-            bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": color, "linewidth": 0.8},
-        )
+        ax.annotate(item["label"], (x[0], y[0]), xytext=(6, 5), textcoords="offset points", fontsize=8.5, bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": color, "linewidth": 0.8})
         item["pole"] = f"{pole_trend:03.0f}/{pole_plunge:02.0f}"
 
     for index, result in enumerate(wedge_results, 1):
@@ -432,90 +431,84 @@ def clean_report_table(dataframe):
     return table
 
 
-def add_report_header_page(pdf, location_id, slope_dd, slope_dip, friction, lateral):
+def report_table_without_columns(dataframe, columns):
+    return dataframe.drop(columns=[column for column in columns if column in dataframe.columns])
+
+
+def draw_report_table(ax, title, dataframe, bbox, font_size=6.1, row_height=0.031):
+    table = clean_report_table(dataframe)
+    if table.empty:
+        table = pd.DataFrame({"Result": ["No records to report."]})
+    x, y, width, height = bbox
+    table_height = min(height, max(0.055, (len(table) + 1) * row_height))
+    table_y = y + height - table_height
+    ax.text(x, y + height + 0.012, title, fontsize=9.0, fontweight="bold", color="#202124", transform=ax.transAxes)
+    rendered = ax.table(cellText=table.values, colLabels=table.columns, loc="center", cellLoc="left", colLoc="left", bbox=[x, table_y, width, table_height])
+    rendered.auto_set_font_size(False)
+    rendered.set_fontsize(font_size)
+    for (row, _column), cell in rendered.get_celld().items():
+        cell.set_edgecolor("#d6d3d1")
+        cell.set_linewidth(0.45)
+        if row == 0:
+            cell.set_facecolor("#e7e5e4")
+            cell.set_text_props(weight="bold", color="#202124")
+        else:
+            cell.set_facecolor("#ffffff")
+            cell.set_text_props(color="#202124")
+
+
+def add_report_tables_page(pdf, location_id, slope_dd, slope_dip, friction, lateral, sets, planar, wedge, toppling, include_planar, include_wedge, include_toppling):
     fig, ax = plt.subplots(figsize=(8.27, 11.69))
     ax.axis("off")
     fig.patch.set_facecolor("white")
-    ax.text(0.08, 0.93, "Stereonet and Kinematic Analysis", fontsize=22, fontweight="bold", color="#202124")
-    ax.text(0.08, 0.87, f"Location ID: {location_id or '-'}", fontsize=14, color="#202124")
-    ax.text(0.08, 0.78, "Analysis inputs", fontsize=13, fontweight="bold", color="#202124")
-    rows = [
-        ("Slope dip direction", f"{slope_dd:.0f} deg"),
-        ("Slope dip", f"{slope_dip:.0f} deg"),
-        ("Friction angle", f"{friction:.0f} deg"),
-        ("Lateral limit", f"{lateral:.0f} deg"),
-    ]
-    y = 0.73
-    for label, value in rows:
-        ax.text(0.10, y, label, fontsize=11, color="#44403c")
-        ax.text(0.45, y, value, fontsize=11, color="#202124")
-        y -= 0.04
-    ax.text(0.08, 0.12, "This report reflects the current inputs and analysis results shown in the Streamlit app.", fontsize=9, color="#57534e")
-    pdf.savefig(fig, bbox_inches="tight")
+    ax.text(0.06, 0.955, "Stereonet and Kinematic Analysis", fontsize=18, fontweight="bold", color="#202124", transform=ax.transAxes)
+    ax.text(0.06, 0.925, f"Location ID: {location_id or '-'}", fontsize=11, color="#202124", transform=ax.transAxes)
+    inputs = pd.DataFrame([
+        {"Parameter": "Slope dip direction", "Value": f"{slope_dd:.0f} deg"},
+        {"Parameter": "Slope dip", "Value": f"{slope_dip:.0f} deg"},
+        {"Parameter": "Friction angle", "Value": f"{friction:.0f} deg"},
+        {"Parameter": "Lateral limit", "Value": f"{lateral:.0f} deg"},
+    ])
+    table_font_size = 6.1
+    draw_report_table(ax, "Analysis inputs", inputs, [0.06, 0.70, 0.88, 0.14], font_size=table_font_size, row_height=0.031)
+    draw_report_table(ax, "Discontinuity sets", sets, [0.06, 0.52, 0.88, 0.12], font_size=table_font_size, row_height=0.026)
+    planar_table = report_table_without_columns(planar, ["Reason"]) if include_planar else pd.DataFrame({"Result": ["Planar sliding analysis disabled."]})
+    wedge_table = report_table_without_columns(wedge, ["Reason"]) if include_wedge else pd.DataFrame({"Result": ["Wedge sliding analysis disabled."]})
+    toppling_table = report_table_without_columns(toppling, ["Reason"]) if include_toppling else pd.DataFrame({"Result": ["Toppling analysis disabled."]})
+    ax.text(0.06, 0.487, "Kinematic analysis", fontsize=11, fontweight="bold", color="#202124", transform=ax.transAxes)
+    draw_report_table(ax, "Planar sliding", planar_table, [0.06, 0.345, 0.88, 0.10], font_size=table_font_size, row_height=0.024)
+    draw_report_table(ax, "Wedge sliding", wedge_table, [0.06, 0.21, 0.88, 0.10], font_size=table_font_size, row_height=0.024)
+    draw_report_table(ax, "Toppling", toppling_table, [0.06, 0.06, 0.88, 0.10], font_size=table_font_size, row_height=0.024)
+    pdf.savefig(fig)
     plt.close(fig)
 
 
 def add_report_plot_page(pdf, stereonet_fig):
     image_buffer = BytesIO()
-    stereonet_fig.savefig(image_buffer, format="png", dpi=220, bbox_inches="tight")
+    stereonet_fig.savefig(image_buffer, format="png", dpi=220)
     image_buffer.seek(0)
     image = plt.imread(image_buffer)
     fig, ax = plt.subplots(figsize=(8.27, 11.69))
     ax.axis("off")
     fig.patch.set_facecolor("white")
-    ax.text(0.08, 0.95, "Stereonet", fontsize=16, fontweight="bold", transform=ax.transAxes, color="#202124")
-    ax.imshow(image)
-    ax.set_position([0.08, 0.08, 0.84, 0.82])
-    pdf.savefig(fig, bbox_inches="tight")
+    image_ax = fig.add_axes([0.05, 0.06, 0.90, 0.88])
+    image_ax.imshow(image)
+    image_ax.axis("off")
+    pdf.savefig(fig)
     plt.close(fig)
-
-
-def add_report_table_pages(pdf, title, dataframe, rows_per_page=24):
-    table = clean_report_table(dataframe)
-    if table.empty:
-        table = pd.DataFrame({"Result": ["No records to report."]})
-    for start in range(0, len(table), rows_per_page):
-        chunk = table.iloc[start : start + rows_per_page]
-        fig, ax = plt.subplots(figsize=(11.69, 8.27))
-        ax.axis("off")
-        fig.patch.set_facecolor("white")
-        suffix = "" if len(table) <= rows_per_page else f" ({start // rows_per_page + 1})"
-        ax.text(0.04, 0.94, f"{title}{suffix}", fontsize=15, fontweight="bold", transform=ax.transAxes, color="#202124")
-        rendered = ax.table(cellText=chunk.values, colLabels=chunk.columns, loc="center", cellLoc="left", colLoc="left", bbox=[0.04, 0.06, 0.92, 0.82])
-        rendered.auto_set_font_size(False)
-        rendered.set_fontsize(7.5)
-        rendered.scale(1, 1.25)
-        for (row, _column), cell in rendered.get_celld().items():
-            cell.set_edgecolor("#d6d3d1")
-            if row == 0:
-                cell.set_facecolor("#e7e5e4")
-                cell.set_text_props(weight="bold", color="#202124")
-            else:
-                cell.set_facecolor("#ffffff")
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close(fig)
 
 
 def build_pdf_report(location_id, slope_dd, slope_dip, friction, lateral, sets, stereonet_fig, summary, planar, wedge, toppling, include_planar, include_wedge, include_toppling):
     report_buffer = BytesIO()
     with PdfPages(report_buffer) as pdf:
-        add_report_header_page(pdf, location_id, slope_dd, slope_dip, friction, lateral)
-        add_report_table_pages(pdf, "Discontinuity sets", sets)
+        add_report_tables_page(pdf, location_id, slope_dd, slope_dip, friction, lateral, sets, planar, wedge, toppling, include_planar, include_wedge, include_toppling)
         add_report_plot_page(pdf, stereonet_fig)
-        add_report_table_pages(pdf, "Orientation summary", summary)
-        if include_planar:
-            add_report_table_pages(pdf, "Planar sliding analysis", planar)
-        if include_wedge:
-            add_report_table_pages(pdf, "Wedge sliding analysis", wedge)
-        if include_toppling:
-            add_report_table_pages(pdf, "Toppling analysis", toppling)
     return report_buffer.getvalue()
 
 
 def report_file_name(location_id):
     clean_location = re.sub(r"[^A-Za-z0-9._-]+", "_", location_id.strip()).strip("_")
-    suffix = f"_{clean_location}" if clean_location else ""
-    return f"stereonet_kinematic_analysis_report{suffix}.pdf"
+    return f"{clean_location or 'stereonet_kinematic_analysis_report'}.pdf"
 
 
 def main():
@@ -564,16 +557,9 @@ def main():
         st.download_button("Download PNG", buffer.getvalue(), "geotechnical_stereonet.png", "image/png")
 
         summary = pd.DataFrame([
-            {
-                "Type": item["type"],
-                "Name": item["label"],
-                "Dip direction": f"{item['dip_direction']:03.0f}",
-                "Dip": f"{item['dip']:02.0f}",
-                "Pole trend/plunge": item["pole"],
-            }
+            {"Type": item["type"], "Name": item["label"], "Dip direction": f"{item['dip_direction']:03.0f}", "Dip": f"{item['dip']:02.0f}", "Pole trend/plunge": item["pole"]}
             for item in orientations
         ])
-
         if show_summary:
             st.subheader("Orientation summary")
             st.dataframe(summary, hide_index=True, use_container_width=True)
