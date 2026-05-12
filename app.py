@@ -22,10 +22,16 @@ REPORTS_DIR = Path(__file__).with_name("reports")
 
 def load_defaults() -> dict:
     fallback = {
+        "location_id": "",
         "slope_dip_direction": 135.0,
         "slope_dip": 45.0,
         "friction_angle": 30.0,
         "lateral_limit": 20.0,
+        "enable_planar": True,
+        "enable_wedge": True,
+        "enable_toppling": True,
+        "show_analysis_zones": True,
+        "show_table": True,
         "sets": [
             {"Plot": True, "Name": "S1", "Dip direction": 120.0, "Dip": 35.0},
             {"Plot": True, "Name": "S2", "Dip direction": 95.0, "Dip": 70.0},
@@ -506,34 +512,134 @@ def build_pdf_report(location_id, slope_dd, slope_dip, friction, lateral, sets, 
     return report_buffer.getvalue()
 
 
+def safe_name(value, fallback):
+    clean_value = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value).strip()).strip("_")
+    return clean_value or fallback
+
+
 def report_file_name(location_id):
-    clean_location = re.sub(r"[^A-Za-z0-9._-]+", "_", location_id.strip()).strip("_")
-    return f"{clean_location or 'stereonet_kinematic_analysis_report'}.pdf"
+    return f"{safe_name(location_id, 'stereonet_kinematic_analysis_report')}.pdf"
+
+
+def project_file_name(location_id):
+    return f"{safe_name(location_id, 'stereonet_project')}.json"
+
+
+def clean_sets_for_project(sets):
+    rows = sets.where(pd.notnull(sets), None).to_dict(orient="records")
+    for row in rows:
+        if "Plot" in row:
+            row["Plot"] = bool(row["Plot"])
+    return rows
+
+
+def build_project_data(location_id, slope_dd, slope_dip, friction, lateral, sets, enable_planar, enable_wedge, enable_toppling, show_zones, show_summary):
+    return {
+        "project_version": 1,
+        "location_id": location_id,
+        "slope_dip_direction": float(slope_dd),
+        "slope_dip": float(slope_dip),
+        "friction_angle": float(friction),
+        "lateral_limit": float(lateral),
+        "enable_planar": bool(enable_planar),
+        "enable_wedge": bool(enable_wedge),
+        "enable_toppling": bool(enable_toppling),
+        "show_analysis_zones": bool(show_zones),
+        "show_table": bool(show_summary),
+        "sets": clean_sets_for_project(sets),
+    }
+
+
+def normalise_project_data(data, fallback):
+    project = fallback | data
+    project["location_id"] = str(project.get("location_id", ""))
+    project["slope_dip_direction"] = clean(project.get("slope_dip_direction"), 360, "Project slope dip direction") % 360
+    project["slope_dip"] = clean(project.get("slope_dip"), 90, "Project slope dip")
+    project["friction_angle"] = clean(project.get("friction_angle"), 89, "Project friction angle")
+    project["lateral_limit"] = clean(project.get("lateral_limit"), 90, "Project lateral limit")
+    project["enable_planar"] = bool(project.get("enable_planar", True))
+    project["enable_wedge"] = bool(project.get("enable_wedge", True))
+    project["enable_toppling"] = bool(project.get("enable_toppling", True))
+    project["show_analysis_zones"] = bool(project.get("show_analysis_zones", True))
+    project["show_table"] = bool(project.get("show_table", True))
+    project["sets"] = [{k: v for k, v in row.items() if k != "Type"} for row in project.get("sets", fallback["sets"])]
+    return project
+
+
+def apply_project_to_session(project):
+    st.session_state["location_id"] = project["location_id"]
+    st.session_state["slope_dd"] = float(project["slope_dip_direction"])
+    st.session_state["slope_dip"] = float(project["slope_dip"])
+    st.session_state["friction"] = float(project["friction_angle"])
+    st.session_state["lateral"] = float(project["lateral_limit"])
+    st.session_state["enable_planar"] = bool(project["enable_planar"])
+    st.session_state["enable_wedge"] = bool(project["enable_wedge"])
+    st.session_state["enable_toppling"] = bool(project["enable_toppling"])
+    st.session_state["show_zones"] = bool(project["show_analysis_zones"])
+    st.session_state["show_summary"] = bool(project["show_table"])
+    st.session_state["project_sets"] = project["sets"]
+    st.session_state["project_load_count"] = int(st.session_state.get("project_load_count", 0)) + 1
+
+
+def initialise_session(defaults):
+    values = {
+        "location_id": str(defaults.get("location_id", "")),
+        "slope_dd": float(defaults["slope_dip_direction"]),
+        "slope_dip": float(defaults["slope_dip"]),
+        "friction": float(defaults["friction_angle"]),
+        "lateral": float(defaults["lateral_limit"]),
+        "enable_planar": bool(defaults.get("enable_planar", True)),
+        "enable_wedge": bool(defaults.get("enable_wedge", True)),
+        "enable_toppling": bool(defaults.get("enable_toppling", True)),
+        "show_zones": bool(defaults.get("show_analysis_zones", True)),
+        "show_summary": bool(defaults.get("show_table", True)),
+    }
+    for key, value in values.items():
+        st.session_state.setdefault(key, value)
 
 
 def main():
     st.set_page_config(page_title="Stereonet and Kinematic Analysis", layout="wide")
     st.title("Stereonet and Kinematic Analysis")
     defaults = load_defaults()
-    location_id = st.text_input("Location ID:", value=str(defaults.get("location_id", "")), placeholder="Enter location ID")
+    initialise_session(defaults)
+
+    with st.sidebar:
+        st.header("Project files")
+        upload = st.file_uploader("Load project JSON", type=["json"])
+        if upload is not None:
+            payload = upload.getvalue()
+            signature = f"{upload.name}:{len(payload)}"
+            if st.session_state.get("loaded_project_signature") != signature:
+                try:
+                    project = normalise_project_data(json.loads(payload.decode("utf-8")), defaults)
+                    apply_project_to_session(project)
+                    st.session_state["loaded_project_signature"] = signature
+                    st.success(f"Loaded project: {upload.name}")
+                except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                    st.error(f"Could not load project file: {exc}")
+
+    initial_sets = st.session_state.get("project_sets", defaults["sets"])
+    editor_key = f"sets_{st.session_state.get('project_load_count', 0)}"
+    location_id = st.text_input("Location ID:", placeholder="Enter location ID", key="location_id")
 
     with st.sidebar:
         st.header("Slope")
-        slope_dd = st.number_input("Slope dip direction", 0.0, 360.0, float(defaults["slope_dip_direction"]), 1.0, key="slope_dd")
-        slope_dip = st.number_input("Slope dip", 0.0, 90.0, float(defaults["slope_dip"]), 1.0, key="slope_dip")
+        slope_dd = st.number_input("Slope dip direction", 0.0, 360.0, 1.0, key="slope_dd")
+        slope_dip = st.number_input("Slope dip", 0.0, 90.0, 1.0, key="slope_dip")
         st.header("Kinematic analysis")
-        enable_planar = st.toggle("Planar sliding", value=True)
-        enable_wedge = st.toggle("Wedge sliding", value=True)
-        enable_toppling = st.toggle("Toppling", value=True)
-        show_zones = st.toggle("Show analysis zones", value=True)
-        friction = st.number_input("Friction angle", 0.0, 89.0, float(defaults["friction_angle"]), 1.0, key="friction")
-        lateral = st.number_input("Lateral limit", 0.0, 90.0, float(defaults["lateral_limit"]), 1.0, key="lateral")
-        show_summary = st.toggle("Show orientation summary", value=True)
+        enable_planar = st.toggle("Planar sliding", key="enable_planar")
+        enable_wedge = st.toggle("Wedge sliding", key="enable_wedge")
+        enable_toppling = st.toggle("Toppling", key="enable_toppling")
+        show_zones = st.toggle("Show analysis zones", key="show_zones")
+        friction = st.number_input("Friction angle", 0.0, 89.0, 1.0, key="friction")
+        lateral = st.number_input("Lateral limit", 0.0, 90.0, 1.0, key="lateral")
+        show_summary = st.toggle("Show orientation summary", key="show_summary")
 
     st.subheader("Discontinuity Sets")
     sets = st.data_editor(
-        pd.DataFrame(defaults["sets"]),
-        key="sets",
+        pd.DataFrame(initial_sets),
+        key=editor_key,
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
@@ -545,6 +651,13 @@ def main():
         },
     )
 
+    project_json = json.dumps(
+        build_project_data(location_id, slope_dd, slope_dip, friction, lateral, sets, enable_planar, enable_wedge, enable_toppling, show_zones, show_summary),
+        indent=2,
+    )
+    with st.sidebar:
+        st.download_button("Save project JSON", project_json, project_file_name(location_id), "application/json")
+
     try:
         orientations = build_orientations(slope_dd, slope_dip, sets)
         planar_df = analyse_planar(orientations, slope_dd, slope_dip, friction, lateral) if enable_planar else pd.DataFrame()
@@ -552,6 +665,7 @@ def main():
         toppling_df = analyse_toppling(orientations, slope_dd, slope_dip, friction, lateral) if enable_toppling else pd.DataFrame()
         fig = plot_stereonet(orientations, wedge_results, enable_planar, enable_wedge, enable_toppling, show_zones, slope_dd, slope_dip, friction, lateral)
         st.pyplot(fig, clear_figure=False)
+
         buffer = BytesIO()
         fig.savefig(buffer, format="png", dpi=220, bbox_inches="tight")
         st.download_button("Download PNG", buffer.getvalue(), "geotechnical_stereonet.png", "image/png")
@@ -597,7 +711,7 @@ def main():
             st.session_state["report_pdf_path"] = str(report_path)
         if "report_pdf_bytes" in st.session_state:
             st.success(f"PDF report generated: {st.session_state['report_pdf_path']}")
-            st.download_button("Download PDF report", data=st.session_state["report_pdf_bytes"], file_name=st.session_state["report_pdf_name"], mime="application/pdf")
+            st.download_button("Download PDF report", st.session_state["report_pdf_bytes"], st.session_state["report_pdf_name"], "application/pdf")
     except ValueError as exc:
         st.error(str(exc))
 
