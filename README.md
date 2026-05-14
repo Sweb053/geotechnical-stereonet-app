@@ -1,44 +1,27 @@
-# Geotechnical Stereonet
+# AGS Geotechnical Viewer
 
-A Streamlit app for plotting slope and discontinuity set orientations on a lower-hemisphere stereonet, with screening-level planar sliding, wedge sliding, and toppling checks.
+Small first iteration of a Python app for uploading AGS data and plotting Standard Penetration Test results.
 
-## Run Locally
+## What it does now
+
+- Upload `.ags`, `.csv`, `.txt`, or AGS-style `.xlsx` files.
+- Parse AGS groups into tables.
+- Read `ISPT` data using:
+  - `LOCA_ID` as the investigation ID.
+  - `ISPT_TOP` as SPT depth.
+  - `ISPT_MAIN` as the SPT blow count.
+- Match each SPT to `GEOL` using:
+  - Same `LOCA_ID`.
+  - `GEOL_TOP <= ISPT_TOP < GEOL_BASE`.
+  - Final-base inclusive fallback where a test is exactly on the deepest logged base.
+- Plot:
+  - SPTs against depth for all selected investigations.
+  - SPTs against depth filtered by geological unit (`GEOL_GEOL`).
+
+## Run
 
 ```powershell
-python -m pip install -r requirements.txt
-python -m streamlit run app.py
+streamlit run app.py
 ```
 
-## Deploy On Streamlit Community Cloud
-
-1. Go to <https://share.streamlit.io>.
-2. Sign in with GitHub.
-3. Create a new app from this repository.
-4. Set the main file path to `app.py`.
-5. Deploy.
-
-## Input Convention
-
-- Dip direction is azimuth clockwise from north.
-- Dip is in degrees from horizontal and must be between 0 and 90.
-- Enter all discontinuities in one `Discontinuity Sets` table.
-- The app uses lower-hemisphere stereographic projection.
-
-## Kinematic Analysis
-
-This is a screening-level kinematic analysis only. It checks orientation feasibility on a stereonet; it does not calculate factor of safety, block volume, persistence, groundwater pressure, cohesion, seismic loading, or release-plane geometry.
-
-Planar sliding checks whether a discontinuity dips out of the slope, exceeds the friction angle, and daylights through the slope face.
-
-Wedge sliding checks every pair of discontinuities and tests whether the intersection line plunges out of the slope, exceeds the friction angle, and daylights through the slope face.
-
-Toppling checks for steep discontinuities dipping into the slope using the threshold `dip > 90 - slope dip + friction angle`.
-
-## Sources
-
-- Rocscience Dips, Kinematic Analysis Overview: <https://www.rocscience.com/help/dips/v9/documentation/stereonet-2d/kinematic-analysis/kinematic-analysis-overview>
-- Rocscience Dips, Planar Sliding: <https://www.rocscience.com/help/dips/v9/documentation/stereonet-2d/kinematic-analysis/planar-sliding>
-- Rocscience Dips, Wedge Sliding: <https://www.rocscience.com/help/dips/v9/documentation/stereonet-2d/kinematic-analysis/wedge-sliding>
-- Rocscience Dips, Flexural Toppling: <https://www.rocscience.com/help/dips/v9/documentation/stereonet-2d/kinematic-analysis/flexural-toppling>
-- Markland, J.T. (1972), `A useful technique for estimating the stability of rock slopes when the rigid wedge slide type of failure is expected`.
-- Wyllie, D.C. and Mah, C.W., `Rock Slope Engineering: Civil Applications`.
+Then upload an AGS file or the provided AGS-style Excel export.
