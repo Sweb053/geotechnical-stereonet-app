@@ -388,6 +388,55 @@ def annotate_toppling(
     return pd.DataFrame(rows)
 
 
+def direct_toppling_zone(
+    trend: float,
+    plunge: float,
+    slope_dip_direction: float,
+    slope_dip: float,
+    friction_angle: float,
+    lateral_limit: float,
+) -> str:
+    into_slope = (slope_dip_direction + 180.0) % 360.0
+    alignment = angular_difference(trend, into_slope)
+    inside_lateral_limits = alignment <= lateral_limit
+    inside_friction_cone = plunge >= max(0.0, 90.0 - friction_angle)
+    inside_slope_angle_limit = plunge >= max(0.0, 90.0 - slope_dip)
+
+    if inside_lateral_limits and inside_slope_angle_limit:
+        return "Zone 2" if inside_friction_cone else "Zone 1"
+    if not inside_lateral_limits and inside_friction_cone:
+        return "Zone 3"
+    return "Outside"
+
+
+def release_plane_result(
+    item: dict[str, object],
+    slope_dip_direction: float,
+    slope_dip: float,
+    friction_angle: float,
+    lateral_limit: float,
+) -> dict[str, object]:
+    pole_trend, pole_plunge = pole_from_plane(float(item["dip_direction"]), float(item["dip"]))
+    zone = direct_toppling_zone(pole_trend, pole_plunge, slope_dip_direction, slope_dip, friction_angle, lateral_limit)
+    if zone == "Zone 1":
+        release_mode = "Sliding release"
+    elif zone == "Zone 2":
+        release_mode = "Base release"
+    elif zone == "Zone 3":
+        release_mode = "Oblique base release"
+    else:
+        release_mode = "Outside release zone"
+
+    return {
+        "label": item["label"],
+        "pole_trend": pole_trend,
+        "pole_plunge": pole_plunge,
+        "zone": zone,
+        "release_mode": release_mode,
+        "valid": zone != "Outside",
+    }
+
+
 def block_toppling_result(
     first: dict[str, object],
     second: dict[str, object],
@@ -402,31 +451,23 @@ def block_toppling_result(
         return None
 
     trend, plunge = line
-    into_slope = (slope_dip_direction + 180.0) % 360.0
-    alignment = angular_difference(trend, into_slope)
-    primary_intersection = alignment <= lateral_limit and plunge >= max(0.0, 90.0 - slope_dip)
-    oblique_intersection = alignment > lateral_limit and plunge >= max(0.0, 90.0 - friction_angle)
-    critical_intersection = primary_intersection or oblique_intersection
+    alignment = angular_difference(trend, (slope_dip_direction + 180.0) % 360.0)
+    intersection_zone = direct_toppling_zone(trend, plunge, slope_dip_direction, slope_dip, friction_angle, lateral_limit)
+    critical_intersection = intersection_zone != "Outside"
 
-    release_planes = [
-        item["label"]
+    release_candidates = [
+        release_plane_result(item, slope_dip_direction, slope_dip, friction_angle, lateral_limit)
         for item in discontinuities
-        if item["label"] not in {first["label"], second["label"]} and float(item["dip"]) <= friction_angle
+        if item["label"] not in {first["label"], second["label"]}
     ]
-    susceptible = critical_intersection and bool(release_planes)
+    valid_release_planes = [candidate for candidate in release_candidates if candidate["valid"]]
+    susceptible = critical_intersection and bool(valid_release_planes)
 
     reasons = []
     if not critical_intersection:
         reasons.append("intersection outside block toppling zone")
-    if not release_planes:
-        reasons.append("no low-dip release/base plane")
-
-    if primary_intersection:
-        mode = "Primary"
-    elif oblique_intersection:
-        mode = "Oblique"
-    else:
-        mode = "Outside"
+    if not valid_release_planes:
+        reasons.append("no geometrically valid release/base plane")
 
     return {
         "first": first["label"],
@@ -434,8 +475,8 @@ def block_toppling_result(
         "trend": trend,
         "plunge": plunge,
         "alignment": alignment,
-        "mode": mode,
-        "release_planes": release_planes,
+        "intersection_zone": intersection_zone,
+        "release_planes": valid_release_planes,
         "critical_intersection": critical_intersection,
         "susceptible": susceptible,
         "reason": "Meets block toppling screening criteria" if susceptible else ", ".join(reasons),
@@ -473,8 +514,12 @@ def analyse_block_toppling(
                     "Trend": f"{result['trend']:03.0f}",
                     "Plunge": f"{result['plunge']:02.0f}",
                     "Into-slope alignment": f"{result['alignment']:.0f}",
-                    "Mode": result["mode"],
-                    "Release planes": ", ".join(result["release_planes"]) if result["release_planes"] else "-",
+                    "Intersection zone": result["intersection_zone"],
+                    "Release planes": ", ".join(
+                        f"{plane['label']} ({plane['zone']}: {plane['release_mode']})" for plane in result["release_planes"]
+                    )
+                    if result["release_planes"]
+                    else "-",
                     "Block toppling": "Potential" if result["susceptible"] else "No",
                     "Reason": result["reason"],
                 }

@@ -34,7 +34,7 @@ Wedge sliding checks every pair of discontinuities and tests whether the interse
 
 Flexural toppling checks for steep discontinuities dipping into the slope using the threshold `dip > 90 - slope dip + friction angle`.
 
-Block toppling is treated as a direct/block toppling screen. It checks discontinuity-pair intersections that plunge into the slope against the slope-angle and lateral-limit envelope, then flags whether a separate low-dip release/base plane is present. This is an orientation feasibility screen only; it is not a Goodman-Bray force equilibrium or block geometry model.
+Block toppling is treated as a direct/block toppling screen. It checks discontinuity-pair intersections that plunge into the slope against the slope-angle, friction-angle, and lateral-limit envelope. It then checks whether a separate discontinuity pole plots in a valid direct-toppling release/base-plane zone, rather than accepting a base plane by dip alone. This is an orientation feasibility screen only; it is not a Goodman-Bray force equilibrium or block geometry model.
 
 ## Sources
 
