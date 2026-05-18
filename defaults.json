@@ -1,8 +1,9 @@
 {
   "slope_dip_direction": 180.0,
   "slope_dip": 53.0,
-  "friction_angle": 37.0,
+  "friction_angle": 30.0,
   "lateral_limit": 20.0,
+  "enable_block_toppling": true,
   "sets": [
     {
       "Plot": true,

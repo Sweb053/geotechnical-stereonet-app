@@ -41,6 +41,7 @@ def load_defaults() -> dict[str, object]:
         "slope_dip": 45.0,
         "friction_angle": 30.0,
         "lateral_limit": 20.0,
+        "enable_block_toppling": True,
         "sets": [
             {"Plot": True, "Name": "S1", "Dip direction": 120.0, "Dip": 35.0},
             {"Plot": True, "Name": "S2", "Dip direction": 95.0, "Dip": 70.0},
@@ -1217,7 +1218,7 @@ def normalise_project_data(data: dict[str, object], fallback: dict[str, object])
     project["enable_planar"] = bool(project.get("enable_planar", True))
     project["enable_wedge"] = bool(project.get("enable_wedge", True))
     project["enable_toppling"] = bool(project.get("enable_toppling", True))
-    project["enable_block_toppling"] = bool(project.get("enable_block_toppling", False))
+    project["enable_block_toppling"] = bool(project.get("enable_block_toppling", True))
     project["show_analysis_zones"] = bool(project.get("show_analysis_zones", True))
     project["show_table"] = bool(project.get("show_table", True))
     project["sets"] = [{key: value for key, value in row.items() if key != "Type"} for row in project.get("sets", fallback["sets"])]
@@ -1303,7 +1304,7 @@ def main() -> None:
         enable_toppling = st.toggle("Flexural toppling", value=bool(st.session_state.get("enable_toppling", True)), key="enable_toppling")
         enable_block_toppling = st.toggle(
             "Block toppling",
-            value=bool(st.session_state.get("enable_block_toppling", False)),
+            value=bool(st.session_state.get("enable_block_toppling", True)),
             key="enable_block_toppling",
         )
         show_analysis_zones = st.toggle(
