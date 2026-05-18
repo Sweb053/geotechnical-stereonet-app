@@ -1,6 +1,6 @@
 # Geotechnical Stereonet
 
-A Streamlit app for plotting slope and discontinuity set orientations on a lower-hemisphere stereonet, with screening-level planar sliding, wedge sliding, and toppling checks.
+A Streamlit app for plotting slope and discontinuity set orientations on a lower-hemisphere stereonet, with screening-level planar sliding, wedge sliding, flexural toppling, and block toppling checks.
 
 ## Run Locally
 
@@ -32,7 +32,9 @@ Planar sliding checks whether a discontinuity dips out of the slope, exceeds the
 
 Wedge sliding checks every pair of discontinuities and tests whether the intersection line plunges out of the slope, exceeds the friction angle, and daylights through the slope face.
 
-Toppling checks for steep discontinuities dipping into the slope using the threshold `dip > 90 - slope dip + friction angle`.
+Flexural toppling checks for steep discontinuities dipping into the slope using the threshold `dip > 90 - slope dip + friction angle`.
+
+Block toppling is treated as a direct/block toppling screen. It checks discontinuity-pair intersections that plunge into the slope against the slope-angle and lateral-limit envelope, then flags whether a separate low-dip release/base plane is present. This is an orientation feasibility screen only; it is not a Goodman-Bray force equilibrium or block geometry model.
 
 ## Sources
 
@@ -40,5 +42,6 @@ Toppling checks for steep discontinuities dipping into the slope using the thres
 - Rocscience Dips, Planar Sliding: <https://www.rocscience.com/help/dips/v9/documentation/stereonet-2d/kinematic-analysis/planar-sliding>
 - Rocscience Dips, Wedge Sliding: <https://www.rocscience.com/help/dips/v9/documentation/stereonet-2d/kinematic-analysis/wedge-sliding>
 - Rocscience Dips, Flexural Toppling: <https://www.rocscience.com/help/dips/v9/documentation/stereonet-2d/kinematic-analysis/flexural-toppling>
+- Rocscience Dips, Direct Toppling: <https://www.rocscience.com/help/dips/v9/documentation/stereonet-2d/kinematic-analysis/direct-toppling>
 - Markland, J.T. (1972), `A useful technique for estimating the stability of rock slopes when the rigid wedge slide type of failure is expected`.
 - Wyllie, D.C. and Mah, C.W., `Rock Slope Engineering: Civil Applications`.

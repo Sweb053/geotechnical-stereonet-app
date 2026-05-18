@@ -21,6 +21,7 @@ COLORS = {
 KINEMATIC_HIGHLIGHT = "#7c2d12"
 WEDGE_HIGHLIGHT = "#4f46e5"
 TOPPLING_HIGHLIGHT = "#9333ea"
+BLOCK_TOPPLING_HIGHLIGHT = "#f59e0b"
 DEFAULTS_PATH = Path(__file__).with_name("defaults.json")
 REPORTS_DIR = Path(__file__).with_name("reports")
 
@@ -387,6 +388,101 @@ def annotate_toppling(
     return pd.DataFrame(rows)
 
 
+def block_toppling_result(
+    first: dict[str, object],
+    second: dict[str, object],
+    discontinuities: list[dict[str, object]],
+    slope_dip_direction: float,
+    slope_dip: float,
+    friction_angle: float,
+    lateral_limit: float,
+) -> dict[str, object] | None:
+    line = intersection_line(first, second)
+    if line is None:
+        return None
+
+    trend, plunge = line
+    into_slope = (slope_dip_direction + 180.0) % 360.0
+    alignment = angular_difference(trend, into_slope)
+    primary_intersection = alignment <= lateral_limit and plunge >= max(0.0, 90.0 - slope_dip)
+    oblique_intersection = alignment > lateral_limit and plunge >= max(0.0, 90.0 - friction_angle)
+    critical_intersection = primary_intersection or oblique_intersection
+
+    release_planes = [
+        item["label"]
+        for item in discontinuities
+        if item["label"] not in {first["label"], second["label"]} and float(item["dip"]) <= friction_angle
+    ]
+    susceptible = critical_intersection and bool(release_planes)
+
+    reasons = []
+    if not critical_intersection:
+        reasons.append("intersection outside block toppling zone")
+    if not release_planes:
+        reasons.append("no low-dip release/base plane")
+
+    if primary_intersection:
+        mode = "Primary"
+    elif oblique_intersection:
+        mode = "Oblique"
+    else:
+        mode = "Outside"
+
+    return {
+        "first": first["label"],
+        "second": second["label"],
+        "trend": trend,
+        "plunge": plunge,
+        "alignment": alignment,
+        "mode": mode,
+        "release_planes": release_planes,
+        "critical_intersection": critical_intersection,
+        "susceptible": susceptible,
+        "reason": "Meets block toppling screening criteria" if susceptible else ", ".join(reasons),
+    }
+
+
+def analyse_block_toppling(
+    orientations: list[dict[str, object]],
+    slope_dip_direction: float,
+    slope_dip: float,
+    friction_angle: float,
+    lateral_limit: float,
+) -> tuple[pd.DataFrame, list[dict[str, object]]]:
+    discontinuities = [item for item in orientations if item["type"] != "Slope"]
+    results = []
+    rows = []
+
+    for first_index, first in enumerate(discontinuities):
+        for second in discontinuities[first_index + 1 :]:
+            result = block_toppling_result(
+                first,
+                second,
+                discontinuities,
+                slope_dip_direction,
+                slope_dip,
+                friction_angle,
+                lateral_limit,
+            )
+            if result is None:
+                continue
+            results.append(result)
+            rows.append(
+                {
+                    "Planes": f"{result['first']} + {result['second']}",
+                    "Trend": f"{result['trend']:03.0f}",
+                    "Plunge": f"{result['plunge']:02.0f}",
+                    "Into-slope alignment": f"{result['alignment']:.0f}",
+                    "Mode": result["mode"],
+                    "Release planes": ", ".join(result["release_planes"]) if result["release_planes"] else "-",
+                    "Block toppling": "Potential" if result["susceptible"] else "No",
+                    "Reason": result["reason"],
+                }
+            )
+
+    return pd.DataFrame(rows), results
+
+
 def sector_polygon(
     center_bearing: float,
     half_width: float,
@@ -589,8 +685,10 @@ def plot_stereonet(
     show_planar_analysis: bool = False,
     show_wedge_analysis: bool = False,
     show_toppling_analysis: bool = False,
+    show_block_toppling_analysis: bool = False,
     show_analysis_zones: bool = True,
     wedge_results: list[dict[str, object]] | None = None,
+    block_toppling_results: list[dict[str, object]] | None = None,
     slope_dip_direction: float | None = None,
     slope_dip: float | None = None,
     friction_angle: float | None = None,
@@ -600,7 +698,7 @@ def plot_stereonet(
     fig.patch.set_facecolor("#ffffff")
     add_stereonet_grid(ax)
 
-    show_any_analysis = show_planar_analysis or show_wedge_analysis or show_toppling_analysis
+    show_any_analysis = show_planar_analysis or show_wedge_analysis or show_toppling_analysis or show_block_toppling_analysis
     if show_analysis_zones and show_any_analysis:
         add_analysis_zones(
             ax,
@@ -692,6 +790,32 @@ def plot_stereonet(
             bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": WEDGE_HIGHLIGHT, "linewidth": 0.8},
         )
 
+    block_toppling_results = block_toppling_results or []
+    for index, result in enumerate(block_toppling_results, start=1):
+        trend = float(result["trend"])
+        plunge = float(result["plunge"])
+        x, y = project_lower_hemisphere(np.array([trend]), np.array([plunge]))
+        susceptible = bool(result["susceptible"])
+        ax.scatter(
+            [x[0]],
+            [y[0]],
+            s=108 if susceptible else 60,
+            marker="P",
+            color=BLOCK_TOPPLING_HIGHLIGHT if susceptible else "#fbbf24",
+            edgecolor="white",
+            linewidth=1.0,
+            zorder=7,
+        )
+        ax.annotate(
+            f"B{index}",
+            (x[0], y[0]),
+            xytext=(6, 10),
+            textcoords="offset points",
+            fontsize=8.5,
+            color="#202124",
+            bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": BLOCK_TOPPLING_HIGHLIGHT, "linewidth": 0.8},
+        )
+
     handles = [
         plt.Line2D([0], [0], color=color, marker="o", markersize=6, linewidth=2, label=kind)
         for kind, color in COLORS.items()
@@ -733,8 +857,20 @@ def plot_stereonet(
                 label="Wedge sliding potential",
             )
         )
+    if any(result["susceptible"] for result in block_toppling_results):
+        handles.append(
+            plt.Line2D(
+                [0],
+                [0],
+                color=BLOCK_TOPPLING_HIGHLIGHT,
+                marker="P",
+                markersize=7,
+                linewidth=0,
+                label="Block toppling potential",
+            )
+        )
     if show_any_analysis:
-        if show_planar_analysis or show_toppling_analysis:
+        if show_planar_analysis or show_toppling_analysis or show_block_toppling_analysis:
             handles.append(
                 plt.Line2D(
                     [0],
@@ -874,9 +1010,11 @@ def add_report_tables_page(
     planar: pd.DataFrame,
     wedge: pd.DataFrame,
     toppling: pd.DataFrame,
+    block_toppling: pd.DataFrame,
     include_planar: bool,
     include_wedge: bool,
     include_toppling: bool,
+    include_block_toppling: bool,
 ) -> None:
     fig, ax = plt.subplots(figsize=(8.27, 11.69))
     ax.axis("off")
@@ -900,11 +1038,17 @@ def add_report_tables_page(
     planar_table = report_table_without_columns(planar, ["Reason"]) if include_planar else pd.DataFrame({"Result": ["Planar sliding analysis disabled."]})
     wedge_table = report_table_without_columns(wedge, ["Reason"]) if include_wedge else pd.DataFrame({"Result": ["Wedge sliding analysis disabled."]})
     toppling_table = report_table_without_columns(toppling, ["Reason"]) if include_toppling else pd.DataFrame({"Result": ["Toppling analysis disabled."]})
+    block_toppling_table = (
+        report_table_without_columns(block_toppling, ["Reason"])
+        if include_block_toppling
+        else pd.DataFrame({"Result": ["Block toppling analysis disabled."]})
+    )
 
     ax.text(0.06, 0.487, "Kinematic analysis", fontsize=11, fontweight="bold", color="#202124", transform=ax.transAxes)
-    draw_report_table(ax, "Planar sliding", planar_table, [0.06, 0.345, 0.88, 0.10], font_size=table_font_size, row_height=0.024)
-    draw_report_table(ax, "Wedge sliding", wedge_table, [0.06, 0.21, 0.88, 0.10], font_size=table_font_size, row_height=0.024)
-    draw_report_table(ax, "Toppling", toppling_table, [0.06, 0.06, 0.88, 0.10], font_size=table_font_size, row_height=0.024)
+    draw_report_table(ax, "Planar sliding", planar_table, [0.06, 0.37, 0.88, 0.075], font_size=table_font_size, row_height=0.020)
+    draw_report_table(ax, "Wedge sliding", wedge_table, [0.06, 0.265, 0.88, 0.075], font_size=table_font_size, row_height=0.020)
+    draw_report_table(ax, "Flexural toppling", toppling_table, [0.06, 0.16, 0.88, 0.075], font_size=table_font_size, row_height=0.020)
+    draw_report_table(ax, "Block toppling", block_toppling_table, [0.06, 0.055, 0.88, 0.075], font_size=table_font_size, row_height=0.020)
     pdf.savefig(fig)
     plt.close(fig)
 
@@ -937,9 +1081,11 @@ def build_pdf_report(
     planar: pd.DataFrame,
     wedge: pd.DataFrame,
     toppling: pd.DataFrame,
+    block_toppling: pd.DataFrame,
     include_planar: bool,
     include_wedge: bool,
     include_toppling: bool,
+    include_block_toppling: bool,
 ) -> bytes:
     report_buffer = BytesIO()
     with PdfPages(report_buffer) as pdf:
@@ -954,9 +1100,11 @@ def build_pdf_report(
             planar,
             wedge,
             toppling,
+            block_toppling,
             include_planar,
             include_wedge,
             include_toppling,
+            include_block_toppling,
         )
         add_report_plot_page(pdf, stereonet_fig)
     return report_buffer.getvalue()
@@ -993,6 +1141,7 @@ def build_project_data(
     enable_planar: bool,
     enable_wedge: bool,
     enable_toppling: bool,
+    enable_block_toppling: bool,
     show_analysis_zones: bool,
     show_table: bool,
 ) -> dict[str, object]:
@@ -1006,6 +1155,7 @@ def build_project_data(
         "enable_planar": bool(enable_planar),
         "enable_wedge": bool(enable_wedge),
         "enable_toppling": bool(enable_toppling),
+        "enable_block_toppling": bool(enable_block_toppling),
         "show_analysis_zones": bool(show_analysis_zones),
         "show_table": bool(show_table),
         "sets": clean_sets_for_project(sets),
@@ -1022,6 +1172,7 @@ def normalise_project_data(data: dict[str, object], fallback: dict[str, object])
     project["enable_planar"] = bool(project.get("enable_planar", True))
     project["enable_wedge"] = bool(project.get("enable_wedge", True))
     project["enable_toppling"] = bool(project.get("enable_toppling", True))
+    project["enable_block_toppling"] = bool(project.get("enable_block_toppling", False))
     project["show_analysis_zones"] = bool(project.get("show_analysis_zones", True))
     project["show_table"] = bool(project.get("show_table", True))
     project["sets"] = [{key: value for key, value in row.items() if key != "Type"} for row in project.get("sets", fallback["sets"])]
@@ -1037,6 +1188,7 @@ def apply_project_to_session(project: dict[str, object]) -> None:
     st.session_state["enable_planar"] = bool(project["enable_planar"])
     st.session_state["enable_wedge"] = bool(project["enable_wedge"])
     st.session_state["enable_toppling"] = bool(project["enable_toppling"])
+    st.session_state["enable_block_toppling"] = bool(project["enable_block_toppling"])
     st.session_state["show_analysis_zones"] = bool(project["show_analysis_zones"])
     st.session_state["show_table"] = bool(project["show_table"])
     st.session_state["project_sets"] = project["sets"]
@@ -1103,7 +1255,12 @@ def main() -> None:
         st.header("Kinematic analysis")
         enable_planar = st.toggle("Planar sliding", value=bool(st.session_state.get("enable_planar", True)), key="enable_planar")
         enable_wedge = st.toggle("Wedge sliding", value=bool(st.session_state.get("enable_wedge", True)), key="enable_wedge")
-        enable_toppling = st.toggle("Toppling", value=bool(st.session_state.get("enable_toppling", True)), key="enable_toppling")
+        enable_toppling = st.toggle("Flexural toppling", value=bool(st.session_state.get("enable_toppling", True)), key="enable_toppling")
+        enable_block_toppling = st.toggle(
+            "Block toppling",
+            value=bool(st.session_state.get("enable_block_toppling", False)),
+            key="enable_block_toppling",
+        )
         show_analysis_zones = st.toggle(
             "Show analysis zones",
             value=bool(st.session_state.get("show_analysis_zones", True)),
@@ -1157,6 +1314,7 @@ def main() -> None:
             enable_planar=enable_planar,
             enable_wedge=enable_wedge,
             enable_toppling=enable_toppling,
+            enable_block_toppling=enable_block_toppling,
             show_analysis_zones=show_analysis_zones,
             show_table=show_table,
         ),
@@ -1176,20 +1334,32 @@ def main() -> None:
         wedge_df = pd.DataFrame()
         wedge_results: list[dict[str, object]] = []
         toppling_df = pd.DataFrame()
+        block_toppling_df = pd.DataFrame()
+        block_toppling_results: list[dict[str, object]] = []
         if enable_planar:
             planar_df = annotate_planar_sliding(orientations, slope_dd, slope_dip, friction_angle, lateral_limit)
         if enable_wedge:
             wedge_df, wedge_results = analyse_wedge_sliding(orientations, slope_dd, slope_dip, friction_angle, lateral_limit)
         if enable_toppling:
             toppling_df = annotate_toppling(orientations, slope_dd, slope_dip, friction_angle, lateral_limit)
+        if enable_block_toppling:
+            block_toppling_df, block_toppling_results = analyse_block_toppling(
+                orientations,
+                slope_dd,
+                slope_dip,
+                friction_angle,
+                lateral_limit,
+            )
 
         fig = plot_stereonet(
             orientations,
             show_planar_analysis=enable_planar,
             show_wedge_analysis=enable_wedge,
             show_toppling_analysis=enable_toppling,
+            show_block_toppling_analysis=enable_block_toppling,
             show_analysis_zones=show_analysis_zones,
             wedge_results=wedge_results,
+            block_toppling_results=block_toppling_results,
             slope_dip_direction=slope_dd,
             slope_dip=slope_dip,
             friction_angle=friction_angle,
@@ -1242,13 +1412,22 @@ def main() -> None:
                 st.dataframe(wedge_df, hide_index=True, use_container_width=True)
 
         if enable_toppling:
-            st.subheader("Toppling analysis")
+            st.subheader("Flexural toppling analysis")
             if toppling_df.empty:
-                st.info("Add discontinuity sets to analyse toppling.")
+                st.info("Add discontinuity sets to analyse flexural toppling.")
             else:
                 susceptible_count = int((toppling_df["Toppling"] == "Potential").sum())
-                st.metric("Potential toppling planes", susceptible_count)
+                st.metric("Potential flexural toppling planes", susceptible_count)
                 st.dataframe(toppling_df, hide_index=True, use_container_width=True)
+
+        if enable_block_toppling:
+            st.subheader("Block toppling analysis")
+            if block_toppling_df.empty:
+                st.info("Add at least three discontinuity sets to analyse block toppling with a release/base plane.")
+            else:
+                susceptible_count = int((block_toppling_df["Block toppling"] == "Potential").sum())
+                st.metric("Potential block toppling intersections", susceptible_count)
+                st.dataframe(block_toppling_df, hide_index=True, use_container_width=True)
 
         st.subheader("Export report")
         if st.button("Generate PDF report", type="primary"):
@@ -1264,9 +1443,11 @@ def main() -> None:
                 planar=planar_df,
                 wedge=wedge_df,
                 toppling=toppling_df,
+                block_toppling=block_toppling_df,
                 include_planar=enable_planar,
                 include_wedge=enable_wedge,
                 include_toppling=enable_toppling,
+                include_block_toppling=enable_block_toppling,
             )
             file_name = report_file_name(location_id)
             REPORTS_DIR.mkdir(exist_ok=True)
